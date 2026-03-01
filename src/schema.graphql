@@ -1,7 +1,19 @@
+scalar Date
+scalar DateTime
+
 # Represents the GPS tracking device
 type Tsutsyk {
     id: ID!
     sessions: [Session!]!
+}
+
+# Ensure your Location type is also defined
+type Location {
+    id: Int!
+    latitude: Float!
+    longitude: Float!
+    timestamp: DateTime!
+    sessionId: String!
 }
 
 # Represents a specific trip or tracking period
@@ -12,21 +24,12 @@ type Session {
     locations: [Location!]!
 }
 
-# The specific breadcrumb/coordinate point
-type Location {
-    id: Int!
-    latitude: Float!
-    longitude: Float!
-    timestamp: String! # ISO8601 String
-    sessionId: String!
-}
-
 type Query {
-    # Fetch historical points for a session to draw the path on map load
-    getHistory(sessionId: ID!): [Location!]!
+    # This name MUST match the string in your @Query() decorator
+    getTsutsykHistory(sessionId: ID!): [Location!]!
 
-    # Get all trackers
-    getAllTsutsyks: [Tsutsyk!]!
+    # Optional: add a query to get the tracker details
+    getTsutsyk(id: ID!): Tsutsyk
 }
 
 type Mutation {
