@@ -55,11 +55,9 @@ export class TrackerService {
       timestamp: new Date().toISOString(), // Match the String type in your schema
     };
 
-    this.pubSub.publish('locationUpdates', { locationUpdates: payload });
+    await this.pubSub.publish('locationUpdates', { locationUpdates: payload });
 
     return { count: points.length };
-
-    return { count: data.length };
   }
 
   async getLocationHistory(sessionId: string): Promise<PrismaLocation[]> {
