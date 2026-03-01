@@ -1,0 +1,47 @@
+# Represents the GPS tracking device
+type Tsutsyk {
+    id: ID!
+    sessions: [Session!]!
+}
+
+# Represents a specific trip or tracking period
+type Session {
+    id: ID!
+    tsutsykId: String!
+    tsutsyk: Tsutsyk!
+    locations: [Location!]!
+}
+
+# The specific breadcrumb/coordinate point
+type Location {
+    id: Int!
+    latitude: Float!
+    longitude: Float!
+    timestamp: String! # ISO8601 String
+    sessionId: String!
+}
+
+type Query {
+    # Fetch historical points for a session to draw the path on map load
+    getHistory(sessionId: ID!): [Location!]!
+
+    # Get all trackers
+    getAllTsutsyks: [Tsutsyk!]!
+}
+
+type Mutation {
+    # While trackers use REST, you can use this for manual testing
+    # or if the client needs to manually add a point.
+    postLocation(
+        tsutsykId: String!,
+        sessionId: String!,
+        lat: Float!,
+        lng: Float!
+    ): Location!
+}
+
+type Subscription {
+    # The magic part: The client listens here for real-time updates
+    # Filtered by sessionId so you don't receive everyone's coordinates
+    locationUpdates(sessionId: ID!): Location!
+}

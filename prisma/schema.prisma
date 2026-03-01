@@ -1,0 +1,38 @@
+datasource db {
+  provider = "postgresql" // Or your preferred DB
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Tsutsyk {
+  id        String    @id @default(uuid())
+  name      String?
+  sessions  Session[]
+  createdAt DateTime  @default(now())
+}
+
+model Session {
+  id        String     @id @default(uuid())
+  startTime DateTime   @default(now())
+  endTime   DateTime?
+  tsutsykId String
+  tsutsyk   Tsutsyk    @relation(fields: [tsutsykId], references: [id])
+  locations Location[]
+
+  @@index([tsutsykId])
+}
+
+model Location {
+  id        Int      @id @default(autoincrement())
+  latitude  Float
+  longitude Float
+  timestamp DateTime @default(now())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id])
+
+  // Optimization: Index by sessionId and timestamp for fast historical lookups
+  @@index([sessionId, timestamp])
+}
