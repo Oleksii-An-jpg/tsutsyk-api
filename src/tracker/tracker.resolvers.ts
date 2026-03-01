@@ -27,6 +27,7 @@ export class TrackerResolvers {
       return payload.locationUpdates.sessionId === variables.sessionId;
     },
   })
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   locationUpdates(@Args('sessionId') sessionId: string) {
     return this.trackerService
       .getPubSub()
