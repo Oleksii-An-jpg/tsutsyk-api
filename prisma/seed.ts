@@ -39,6 +39,7 @@ async function main() {
           latitude: p.lat,
           longitude: p.lng,
           timestamp: new Date(startTime1.getTime() + index * 60000), // 1 min apart
+          battery: 40,
         })),
       },
     },

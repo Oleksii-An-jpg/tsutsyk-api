@@ -29,10 +29,9 @@ model Location {
   id        Int      @id @default(autoincrement())
   latitude  Float
   longitude Float
+  battery   Int?     // 0-100%
+  signal    Int?     // RSSI value
   timestamp DateTime @default(now())
   sessionId String
   session   Session  @relation(fields: [sessionId], references: [id])
-
-  // Optimization: Index by sessionId and timestamp for fast historical lookups
-  @@index([sessionId, timestamp])
 }
