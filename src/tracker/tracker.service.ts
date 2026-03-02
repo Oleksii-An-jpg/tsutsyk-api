@@ -6,6 +6,10 @@ import { Location as GqlLocation } from '../graphql.schema';
 
 type PubSubEvents = {
   locationUpdates: { locationUpdates: GqlLocation };
+  tsutsykAlert: {
+    message: string;
+    tsutsykId: string;
+  };
 };
 
 @Injectable()
@@ -17,12 +21,12 @@ export class TrackerService {
   async recordLocations(
     tsutsykId: string,
     sessionId: string,
-    points: { lat: number; lng: number; time?: string }[],
+    points: { lat: number; battery: number; lng: number; time?: string }[],
   ) {
-    // 1. Ensure Tsutsyk and Session exist (Upsert logic)
+    // 1. Ensure the Session exists (Create it if missing)
     await this.prisma.session.upsert({
       where: { id: sessionId },
-      update: {},
+      update: {}, // If it exists, do nothing
       create: {
         id: sessionId,
         tsutsyk: {
@@ -40,11 +44,20 @@ export class TrackerService {
       longitude: p.lng,
       timestamp: p.time ? new Date(p.time) : new Date(),
       sessionId: sessionId,
+      battery: p.battery,
     }));
 
     await this.prisma.location.createMany({ data });
 
     const latestPoint = points[points.length - 1];
+
+    // Logic: If battery is low, fire an alert immediately
+    if (latestPoint.battery && latestPoint.battery < 20) {
+      await this.pubSub.publish('tsutsykAlert', {
+        message: `Low Battery! ${latestPoint.battery}% remaining.`,
+        tsutsykId,
+      });
+    }
 
     // Explicitly format the object to match GqlLocation
     const payload: GqlLocation = {
@@ -52,6 +65,7 @@ export class TrackerService {
       latitude: latestPoint.lat,
       longitude: latestPoint.lng,
       sessionId: sessionId,
+      battery: latestPoint.battery,
       timestamp: new Date().toISOString(), // Match the String type in your schema
     };
 

@@ -11,7 +11,7 @@ export class IngestController {
     body: {
       tsutsykId: string;
       sessionId: string;
-      points: { lat: number; lng: number; time?: string }[];
+      points: { lat: number; lng: number; battery: number; time?: string }[];
     },
   ) {
     // This allows the tracker to send 1 point or 100 points in one go
