@@ -36,7 +36,7 @@ $ npx prisma generate
 ```
 
 ```bash
-$ cloud-sql-proxy etsutsyk:europe-west4:tsutsyk
+$ cloud-sql-proxy tsutsyk-live:europe-west4:tsutsyk
 
 
 ## Compile and run the project
@@ -79,7 +79,7 @@ $ mau deploy
 With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
 
 ```bash
-$ gcloud app deploy --project=etsutsyk
+$ gcloud app deploy --project=tsutsyk-live
 ```
 
 ## Resources

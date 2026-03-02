@@ -9,7 +9,7 @@ import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
       useFactory: async () => {
         const client = new SecretManagerServiceClient();
         const name =
-          'projects/965875968613/secrets/DATABASE_URL/versions/latest';
+          'projects/538428844920/secrets/DATABASE_URL/versions/latest';
         const [version] = await client.accessSecretVersion({ name });
         const secretValue = version.payload.data.toString('utf8');
 

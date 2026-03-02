@@ -14,6 +14,7 @@ type Location {
     longitude: Float!
     timestamp: DateTime!
     sessionId: String!
+    battery: Float
 }
 
 # Represents a specific trip or tracking period
