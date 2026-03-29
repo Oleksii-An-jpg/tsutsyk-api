@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, SessionStatus } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -17,11 +17,11 @@ async function main() {
     },
   });
 
-  // Trip 1: Morning commute along Krasnov St
-  // Starting near the Hippodrome moving towards the center
-  console.log('Seeding Session 1: Morning Commute...');
-  const session1Id = 'session-morning-run';
+  // Trip 1: Morning commute - COMPLETED
+  console.log('Seeding Session 1: Morning Commute (Completed)...');
+  const session1Id = 'session-2026-03-01-morning';
   const startTime1 = new Date('2026-03-01T08:00:00Z');
+  const endTime1 = new Date('2026-03-01T08:30:00Z');
 
   const points1 = [
     { lat: 46.4445, lng: 30.7312 }, // Near Hippodrome
@@ -34,21 +34,25 @@ async function main() {
     data: {
       id: session1Id,
       tsutsykId: tsutsyk.id,
+      startTime: startTime1,
+      endTime: endTime1,
+      status: SessionStatus.COMPLETED,
       locations: {
         create: points1.map((p, index) => ({
           latitude: p.lat,
           longitude: p.lng,
           timestamp: new Date(startTime1.getTime() + index * 60000), // 1 min apart
-          battery: 40,
+          battery: 95 - index * 2, // Battery drains over time
         })),
       },
     },
   });
 
-  // Trip 2: Evening return
-  console.log('Seeding Session 2: Evening Return...');
-  const session2Id = 'session-evening-return';
+  // Trip 2: Evening return - COMPLETED
+  console.log('Seeding Session 2: Evening Return (Completed)...');
+  const session2Id = 'session-2026-03-01-evening';
   const startTime2 = new Date('2026-03-01T18:00:00Z');
+  const endTime2 = new Date('2026-03-01T18:25:00Z');
 
   const points2 = [
     { lat: 46.4512, lng: 30.7243 },
@@ -61,11 +65,46 @@ async function main() {
     data: {
       id: session2Id,
       tsutsykId: tsutsyk.id,
+      startTime: startTime2,
+      endTime: endTime2,
+      status: SessionStatus.COMPLETED,
       locations: {
         create: points2.map((p, index) => ({
           latitude: p.lat,
           longitude: p.lng,
           timestamp: new Date(startTime2.getTime() + index * 60000),
+          battery: 85 - index * 3,
+        })),
+      },
+    },
+  });
+
+  // Trip 3: Current Active Session - ACTIVE
+  console.log('Seeding Session 3: Active Walk (In Progress)...');
+  const session3Id = 'session-2026-03-15-active';
+  const startTime3 = new Date(Date.now() - 30 * 60000); // Started 30 minutes ago
+
+  const points3 = [
+    { lat: 46.4825, lng: 30.7233 }, // Starting point (Potemkin Stairs area)
+    { lat: 46.4835, lng: 30.725 }, // Moving along Primorsky Boulevard
+    { lat: 46.4845, lng: 30.7265 }, // Towards City Garden
+    { lat: 46.4855, lng: 30.728 }, // Near Deribasivska Street
+    { lat: 46.4862, lng: 30.729 }, // Current position
+  ];
+
+  await prisma.session.create({
+    data: {
+      id: session3Id,
+      tsutsykId: tsutsyk.id,
+      startTime: startTime3,
+      endTime: null, // Still active!
+      status: SessionStatus.ACTIVE,
+      locations: {
+        create: points3.map((p, index) => ({
+          latitude: p.lat,
+          longitude: p.lng,
+          timestamp: new Date(startTime3.getTime() + index * 5 * 60000), // 5 min apart
+          battery: 100 - index * 5, // Battery draining
         })),
       },
     },
@@ -73,8 +112,11 @@ async function main() {
 
   console.log('✅ Seeding successful!');
   console.log(`Created Tsutsyk: ${tsutsykId}`);
+  console.log(`Created 3 Sessions:`);
+  console.log(`  - 2 completed sessions (morning & evening)`);
+  console.log(`  - 1 active session (current walk)`);
   console.log(
-    `Created 2 Sessions with ${points1.length + points2.length} total coordinates in Odesa.`,
+    `Total locations: ${points1.length + points2.length + points3.length}`,
   );
 }
 

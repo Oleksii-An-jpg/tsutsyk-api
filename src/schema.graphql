@@ -19,13 +19,29 @@ type Location {
 
 # Represents a specific trip or tracking period
 type Session {
-    id: ID!
+    id: String!
     tsutsykId: String!
-    tsutsyk: Tsutsyk!
+    startTime: DateTime!
+    endTime: DateTime
+    locationCount: Int!
+    status: SessionStatus!
     locations: [Location!]!
 }
 
+enum SessionStatus {
+    ACTIVE
+    COMPLETED
+}
+
 type Query {
+    # Get all sessions for a device
+    getTsutsykSessions(tsutsykId: String!): [Session!]!
+
+    # Get specific session with all locations
+    getSession(sessionId: String!): Session
+
+    # Get active session for a device (if any)
+    getActiveSession(tsutsykId: String!): Session
     # This name MUST match the string in your @Query() decorator
     getTsutsykHistory(sessionId: ID!): [Location!]!
 
@@ -34,6 +50,10 @@ type Query {
 }
 
 type Mutation {
+    # Auto-created when first location arrives, but you can call manually
+    startSession(tsutsykId: String!, sessionId: String!): Session!
+    # Mark session as completed
+    endSession(sessionId: String!): Session!
     # While trackers use REST, you can use this for manual testing
     # or if the client needs to manually add a point.
     postLocation(
@@ -41,6 +61,7 @@ type Mutation {
         sessionId: String!,
         lat: Float!,
         lng: Float!
+        battery: Int
     ): Location!
 }
 

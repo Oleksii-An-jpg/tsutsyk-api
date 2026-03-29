@@ -5,12 +5,15 @@
   "author": "",
   "private": true,
   "license": "UNLICENSED",
+  "engines": {
+    "node": "24.x.x"
+  },
   "scripts": {
     "prebuild": "DATABASE_URL=placeholder npx prisma generate && npm run generate:typings",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"prisma.config.ts\" \"prisma/seed.ts\"",
     "generate:typings": "ts-node generate-typings.ts",
-    "start": "nest start",
+    "start": "node dist/main",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",

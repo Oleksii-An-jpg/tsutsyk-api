@@ -15,23 +15,32 @@ model Tsutsyk {
 }
 
 model Session {
-  id        String     @id @default(uuid())
-  startTime DateTime   @default(now())
-  endTime   DateTime?
-  tsutsykId String
-  tsutsyk   Tsutsyk    @relation(fields: [tsutsykId], references: [id])
-  locations Location[]
+  id         String        @id
+  tsutsykId  String
+  tsutsyk    Tsutsyk       @relation(fields: [tsutsykId], references: [id])
+  startTime  DateTime      @default(now())
+  endTime    DateTime?
+  status     SessionStatus @default(ACTIVE)
+  locations  Location[]
 
   @@index([tsutsykId])
+  @@index([status])
+}
+
+enum SessionStatus {
+  ACTIVE
+  COMPLETED
 }
 
 model Location {
-  id        Int      @id @default(autoincrement())
-  latitude  Float
-  longitude Float
-  battery   Int?     // 0-100%
-  signal    Int?     // RSSI value
-  timestamp DateTime @default(now())
-  sessionId String
-  session   Session  @relation(fields: [sessionId], references: [id])
+  id         Int      @id @default(autoincrement())
+  sessionId  String
+  session    Session  @relation(fields: [sessionId], references: [id])
+  latitude   Float
+  longitude  Float
+  battery    Int?
+  timestamp  DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([timestamp])
 }

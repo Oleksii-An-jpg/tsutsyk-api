@@ -1,34 +1,68 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PubSub } from 'graphql-subscriptions';
-import { Location as PrismaLocation } from '@prisma/client';
-import { Location as GqlLocation } from '../graphql.schema';
-
-type PubSubEvents = {
-  locationUpdates: { locationUpdates: GqlLocation };
-  tsutsykAlert: {
-    message: string;
-    tsutsykId: string;
-  };
-};
+import {
+  Location as GqlLocation,
+  Session as GqlSession,
+  SessionStatus,
+} from '../graphql.schema';
+import { SessionStatus as PrismaSessionStatus } from '@prisma/client';
 
 @Injectable()
 export class TrackerService {
-  // Type the PubSub instance properly
-  private readonly pubSub = new PubSub<PubSubEvents>();
+  private readonly pubSub = new PubSub();
   constructor(private prisma: PrismaService) {}
 
-  async recordLocations(
-    tsutsykId: string,
-    sessionId: string,
-    points: { lat: number; battery: number; lng: number; time?: string }[],
-  ) {
-    // 1. Ensure the Session exists (Create it if missing)
+  // Helper to convert Prisma enum to GraphQL enum
+  private mapSessionStatus(status: PrismaSessionStatus): SessionStatus {
+    return status as unknown as SessionStatus;
+  }
+
+  async recordSingleLocation({
+    sessionId,
+    tsutsykId,
+    lat,
+    lng,
+    battery,
+  }: {
+    tsutsykId: string;
+    sessionId: string;
+    lat: number;
+    lng: number;
+    battery?: number;
+  }): Promise<GqlLocation> {
+    // 1. Auto-create session if it doesn't exist (plug-and-play!)
+    await this.ensureSessionExists(tsutsykId, sessionId);
+
+    // 2. Create the location point
+    const newPoint = await this.prisma.location.create({
+      data: {
+        latitude: lat,
+        longitude: lng,
+        sessionId: sessionId,
+        battery: battery,
+        timestamp: new Date(),
+      },
+    });
+
+    const gqlPoint: GqlLocation = {
+      ...newPoint,
+      timestamp: newPoint.timestamp.toISOString(),
+    };
+
+    // 3. Publish to subscribers
+    await this.pubSub.publish('locationUpdates', { locationUpdates: gqlPoint });
+
+    return gqlPoint;
+  }
+
+  async ensureSessionExists(tsutsykId: string, sessionId: string) {
     await this.prisma.session.upsert({
       where: { id: sessionId },
-      update: {}, // If it exists, do nothing
+      update: {}, // Already exists, do nothing
       create: {
         id: sessionId,
+        status: SessionStatus.ACTIVE,
         tsutsyk: {
           connectOrCreate: {
             where: { id: tsutsykId },
@@ -37,44 +71,120 @@ export class TrackerService {
         },
       },
     });
-
-    // 2. Batch Insert for Performance
-    const data = points.map((p) => ({
-      latitude: p.lat,
-      longitude: p.lng,
-      timestamp: p.time ? new Date(p.time) : new Date(),
-      sessionId: sessionId,
-      battery: p.battery,
-    }));
-
-    await this.prisma.location.createMany({ data });
-
-    const latestPoint = points[points.length - 1];
-
-    // Logic: If battery is low, fire an alert immediately
-    if (latestPoint.battery && latestPoint.battery < 20) {
-      await this.pubSub.publish('tsutsykAlert', {
-        message: `Low Battery! ${latestPoint.battery}% remaining.`,
-        tsutsykId,
-      });
-    }
-
-    // Explicitly format the object to match GqlLocation
-    const payload: GqlLocation = {
-      id: 0, // Or the actual ID from Prisma if you perform a single create
-      latitude: latestPoint.lat,
-      longitude: latestPoint.lng,
-      sessionId: sessionId,
-      battery: latestPoint.battery,
-      timestamp: new Date().toISOString(), // Match the String type in your schema
-    };
-
-    await this.pubSub.publish('locationUpdates', { locationUpdates: payload });
-
-    return { count: points.length };
   }
 
-  async getLocationHistory(sessionId: string): Promise<PrismaLocation[]> {
+  async getTsutsykSessions(tsutsykId: string): Promise<GqlSession[]> {
+    const sessions = await this.prisma.session.findMany({
+      where: { tsutsykId },
+      include: {
+        locations: {
+          orderBy: { timestamp: 'asc' },
+        },
+      },
+      orderBy: { startTime: 'desc' },
+    });
+
+    return sessions.map((s) => ({
+      id: s.id,
+      tsutsykId: s.tsutsykId,
+      startTime: s.startTime.toISOString(),
+      endTime: s.endTime?.toISOString() || null,
+      status: this.mapSessionStatus(s.status),
+      locationCount: s.locations.length,
+      locations: s.locations.map((l) => ({
+        ...l,
+        timestamp: l.timestamp.toISOString(),
+      })),
+    }));
+  }
+
+  async getSession(sessionId: string): Promise<GqlSession | null> {
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      include: {
+        locations: {
+          orderBy: { timestamp: 'asc' },
+        },
+      },
+    });
+
+    if (!session) return null;
+
+    return {
+      id: session.id,
+      tsutsykId: session.tsutsykId,
+      startTime: session.startTime.toISOString(),
+      endTime: session.endTime?.toISOString() || null,
+      status: this.mapSessionStatus(session.status),
+      locationCount: session.locations.length,
+      locations: session.locations.map((l) => ({
+        ...l,
+        timestamp: l.timestamp.toISOString(),
+      })),
+    };
+  }
+
+  async getActiveSession(tsutsykId: string): Promise<GqlSession | null> {
+    const session = await this.prisma.session.findFirst({
+      where: {
+        tsutsykId,
+        status: SessionStatus.ACTIVE,
+      },
+      include: {
+        locations: {
+          orderBy: { timestamp: 'desc' },
+          take: 1, // Just latest location for active session
+        },
+      },
+      orderBy: { startTime: 'desc' },
+    });
+
+    if (!session) return null;
+
+    return {
+      id: session.id,
+      tsutsykId: session.tsutsykId,
+      startTime: session.startTime.toISOString(),
+      endTime: null,
+      status: this.mapSessionStatus(session.status),
+      locationCount: await this.prisma.location.count({
+        where: { sessionId: session.id },
+      }),
+      locations: session.locations.map((l) => ({
+        ...l,
+        timestamp: l.timestamp.toISOString(),
+      })),
+    };
+  }
+
+  async endSession(sessionId: string): Promise<GqlSession> {
+    const session = await this.prisma.session.update({
+      where: { id: sessionId },
+      data: {
+        status: SessionStatus.COMPLETED,
+        endTime: new Date(),
+      },
+      include: {
+        locations: true,
+      },
+    });
+
+    return {
+      id: session.id,
+      tsutsykId: session.tsutsykId,
+      startTime: session.startTime.toISOString(),
+      endTime: session.endTime?.toISOString() || null,
+      status: this.mapSessionStatus(session.status),
+      locationCount: session.locations.length,
+      locations: session.locations.map((l) => ({
+        ...l,
+        timestamp: l.timestamp.toISOString(),
+      })),
+    };
+  }
+
+  // Existing methods...
+  async getLocationHistory(sessionId: string) {
     return this.prisma.location.findMany({
       where: { sessionId },
       orderBy: { timestamp: 'asc' },

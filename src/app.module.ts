@@ -5,6 +5,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { DateTimeResolver, DateResolver } from 'graphql-scalars';
 import { TrackerModule } from './tracker/tracker.module';
+import { SessionStatus } from '@prisma/client';
 
 @Module({
   imports: [
@@ -22,6 +23,10 @@ import { TrackerModule } from './tracker/tracker.module';
       resolvers: {
         DateTime: DateTimeResolver,
         Date: DateResolver,
+        SessionStatus: {
+          ACTIVE: SessionStatus.ACTIVE,
+          COMPLETED: SessionStatus.COMPLETED,
+        },
       },
     }),
   ],
