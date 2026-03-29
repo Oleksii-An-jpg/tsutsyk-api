@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { PubSub } from 'graphql-subscriptions';
 import {
@@ -189,6 +190,55 @@ export class TrackerService {
       where: { sessionId },
       orderBy: { timestamp: 'asc' },
     });
+  }
+
+  async autoEndInactiveSessions() {
+    const thresholdMinutes = 30; // No updates for 30 minutes = auto-end
+    const threshold = new Date();
+    threshold.setMinutes(threshold.getMinutes() - thresholdMinutes);
+
+    // Find active sessions with no recent locations
+    const inactiveSessions = await this.prisma.session.findMany({
+      where: {
+        status: SessionStatus.ACTIVE,
+        locations: {
+          every: {
+            timestamp: {
+              lt: threshold, // All locations older than threshold
+            },
+          },
+        },
+      },
+      include: {
+        locations: {
+          orderBy: { timestamp: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    // End each inactive session
+    for (const session of inactiveSessions) {
+      await this.prisma.session.update({
+        where: { id: session.id },
+        data: {
+          status: SessionStatus.COMPLETED,
+          endTime: new Date(),
+        },
+      });
+
+      console.log(`Auto-ended inactive session: ${session.id}`);
+    }
+
+    return inactiveSessions.length;
+  }
+
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async handleInactiveSessions() {
+    const count = await this.autoEndInactiveSessions();
+    if (count > 0) {
+      console.log(`Auto-ended ${count} inactive sessions`);
+    }
   }
 
   getPubSub() {
