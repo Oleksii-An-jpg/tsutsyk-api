@@ -58,10 +58,26 @@ export class TrackerService {
   }
 
   async ensureSessionExists(tsutsykId: string, sessionId: string) {
-    await this.prisma.session.upsert({
+    const existing = await this.prisma.session.findUnique({
       where: { id: sessionId },
-      update: {}, // Already exists, do nothing
-      create: {
+    });
+
+    if (existing) return; // already created, nothing to do
+
+    // New session — close any other active ones first
+    await this.prisma.session.updateMany({
+      where: {
+        tsutsykId,
+        status: SessionStatus.ACTIVE,
+      },
+      data: {
+        status: SessionStatus.COMPLETED,
+        endTime: new Date(),
+      },
+    });
+
+    await this.prisma.session.create({
+      data: {
         id: sessionId,
         status: SessionStatus.ACTIVE,
         tsutsyk: {
@@ -202,6 +218,7 @@ export class TrackerService {
       where: {
         status: SessionStatus.ACTIVE,
         locations: {
+          some: {},
           every: {
             timestamp: {
               lt: threshold, // All locations older than threshold
