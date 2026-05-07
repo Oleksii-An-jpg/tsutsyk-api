@@ -4,7 +4,11 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors({
-    origin: ['http://localhost:3000'],
+    origin: [
+      'http://localhost:3000',
+      'https://tsutsyk-client--tsutsyk-live.europe-west4.hosted.app',
+      'https://tsutsyk.live',
+    ],
     credentials: true,
   });
   const port = process.env.PORT ?? 3000;
