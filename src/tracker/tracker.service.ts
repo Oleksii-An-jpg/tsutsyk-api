@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+// import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { PubSub } from 'graphql-subscriptions';
 import {
@@ -250,13 +250,13 @@ export class TrackerService {
     return inactiveSessions.length;
   }
 
-  @Cron(CronExpression.EVERY_5_MINUTES)
-  async handleInactiveSessions() {
-    const count = await this.autoEndInactiveSessions();
-    if (count > 0) {
-      console.log(`Auto-ended ${count} inactive sessions`);
-    }
-  }
+  // @Cron(CronExpression.EVERY_5_MINUTES)
+  // async handleInactiveSessions() {
+  //   const count = await this.autoEndInactiveSessions();
+  //   if (count > 0) {
+  //     console.log(`Auto-ended ${count} inactive sessions`);
+  //   }
+  // }
 
   getPubSub() {
     return this.pubSub;
