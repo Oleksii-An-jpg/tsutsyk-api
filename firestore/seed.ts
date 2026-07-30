@@ -1,5 +1,6 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { FirestoreService } from '../src/firestore/firestore.service';
+import { SessionStatus } from '../src/graphql.schema';
 
 const firestore = new FirestoreService();
 const db = firestore.db;
@@ -9,7 +10,7 @@ async function seedSession(
   sessionId: string,
   startTime: Date,
   endTime: Date | null,
-  status: 'ACTIVE' | 'COMPLETED',
+  status: SessionStatus,
   points: { lat: number; lng: number }[],
   spacingMinutes: number,
   startBattery: number,
@@ -59,7 +60,7 @@ async function main() {
     'session-2026-03-01-morning',
     new Date('2026-03-01T08:00:00Z'),
     new Date('2026-03-01T08:30:00Z'),
-    'COMPLETED',
+    SessionStatus.COMPLETED,
     [
       { lat: 46.4445, lng: 30.7312 }, // Near Hippodrome
       { lat: 46.4462, lng: 30.7295 }, // Moving North on Krasnov
@@ -77,7 +78,7 @@ async function main() {
     'session-2026-03-01-evening',
     new Date('2026-03-01T18:00:00Z'),
     new Date('2026-03-01T18:25:00Z'),
-    'COMPLETED',
+    SessionStatus.COMPLETED,
     [
       { lat: 46.4512, lng: 30.7243 },
       { lat: 46.449, lng: 30.7265 },
@@ -96,7 +97,7 @@ async function main() {
     'session-2026-03-15-active',
     startTime3,
     null, // Still active!
-    'ACTIVE',
+    SessionStatus.ACTIVE,
     [
       { lat: 46.4825, lng: 30.7233 }, // Starting point (Potemkin Stairs area)
       { lat: 46.4835, lng: 30.725 }, // Moving along Primorsky Boulevard

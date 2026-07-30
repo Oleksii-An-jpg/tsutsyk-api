@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { getApps, initializeApp, App } from 'firebase-admin/app';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
+import {
+  tsutsykConverter,
+  sessionConverter,
+  locationConverter,
+} from './converter';
 
 const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'tsutsyk-firestore';
 const PROJECT_ID =
@@ -21,14 +26,17 @@ export class FirestoreService {
   }
 
   get tsutsyks() {
-    return this.db.collection('tsutsyks');
+    return this.db.collection('tsutsyks').withConverter(tsutsykConverter);
   }
 
   get sessions() {
-    return this.db.collection('sessions');
+    return this.db.collection('sessions').withConverter(sessionConverter);
   }
 
   sessionLocations(sessionId: string) {
-    return this.sessions.doc(sessionId).collection('locations');
+    return this.sessions
+      .doc(sessionId)
+      .collection('locations')
+      .withConverter(locationConverter);
   }
 }
