@@ -7,7 +7,16 @@ import {
   Location as GqlLocation,
   Session as GqlSession,
   SessionStatus,
+  Tsutsyk as GqlTsutsyk,
 } from '../graphql.schema';
+
+export const DEFAULT_ALERT_DISTANCE_METERS = 100;
+
+interface TsutsykDoc {
+  createdAt: Timestamp;
+  photoUrl?: string | null;
+  alertDistanceMeters?: number | null;
+}
 
 interface SessionDoc {
   tsutsykId: string;
@@ -134,6 +143,54 @@ export class TrackerService {
     await this.pubSub.publish('locationUpdates', { locationUpdates: gqlPoint });
 
     return gqlPoint;
+  }
+
+  private buildGqlTsutsyk(
+    id: string,
+    data: TsutsykDoc,
+    sessions: GqlSession[],
+  ): GqlTsutsyk {
+    return {
+      id,
+      photoUrl: data.photoUrl ?? null,
+      alertDistanceMeters:
+        data.alertDistanceMeters ?? DEFAULT_ALERT_DISTANCE_METERS,
+      sessions,
+    };
+  }
+
+  async getTsutsyk(id: string): Promise<GqlTsutsyk | null> {
+    const doc = await this.firestore.tsutsyks.doc(id).get();
+    if (!doc.exists) return null;
+
+    const sessions = await this.getTsutsykSessions(id);
+    return this.buildGqlTsutsyk(id, doc.data() as TsutsykDoc, sessions);
+  }
+
+  async updateTsutsyk({
+    id,
+    photoUrl,
+    alertDistanceMeters,
+  }: {
+    id: string;
+    photoUrl?: string | null;
+    alertDistanceMeters?: number | null;
+  }): Promise<GqlTsutsyk> {
+    const tsutsykRef = this.firestore.tsutsyks.doc(id);
+
+    const update: Partial<TsutsykDoc> = {};
+    if (photoUrl !== undefined) update.photoUrl = photoUrl;
+    if (alertDistanceMeters !== undefined)
+      update.alertDistanceMeters = alertDistanceMeters;
+
+    await tsutsykRef.set(update, { merge: true });
+
+    const [doc, sessions] = await Promise.all([
+      tsutsykRef.get(),
+      this.getTsutsykSessions(id),
+    ]);
+
+    return this.buildGqlTsutsyk(id, doc.data() as TsutsykDoc, sessions);
   }
 
   async ensureSessionExists(tsutsykId: string, sessionId: string) {
