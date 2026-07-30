@@ -6,6 +6,7 @@ async function bootstrap() {
   app.enableCors({
     origin: [
       'http://localhost:3000',
+      'https://localhost:3000',
       'https://tsutsyk-client--tsutsyk-live.europe-west4.hosted.app',
       'https://tsutsyk.live',
     ],
