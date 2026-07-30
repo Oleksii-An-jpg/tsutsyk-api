@@ -1,8 +1,13 @@
 import { Injectable } from '@nestjs/common';
 // import { Cron, CronExpression } from '@nestjs/schedule';
 import { PubSub } from 'graphql-subscriptions';
-import { Timestamp } from 'firebase-admin/firestore';
+import { QueryDocumentSnapshot, Timestamp } from 'firebase-admin/firestore';
 import { FirestoreService } from '../firestore/firestore.service';
+import {
+  TsutsykDoc,
+  SessionDoc,
+  LocationDoc,
+} from '../firestore/firestore.types';
 import {
   Location as GqlLocation,
   Session as GqlSession,
@@ -11,27 +16,6 @@ import {
 } from '../graphql.schema';
 
 export const DEFAULT_ALERT_DISTANCE_METERS = 100;
-
-interface TsutsykDoc {
-  createdAt: Timestamp;
-  photoUrl?: string | null;
-  alertDistanceMeters?: number | null;
-}
-
-interface SessionDoc {
-  tsutsykId: string;
-  startTime: Timestamp;
-  endTime: Timestamp | null;
-  status: SessionStatus;
-  lastLocationAt: Timestamp | null;
-}
-
-interface LocationDoc {
-  latitude: number;
-  longitude: number;
-  battery: number | null;
-  timestamp: Timestamp;
-}
 
 interface RawLocation {
   id: string;
@@ -49,9 +33,9 @@ export class TrackerService {
 
   private toRawLocation(
     sessionId: string,
-    doc: FirebaseFirestore.QueryDocumentSnapshot,
+    doc: QueryDocumentSnapshot<LocationDoc>,
   ): RawLocation {
-    const data = doc.data() as LocationDoc;
+    const data = doc.data();
     return {
       id: doc.id,
       sessionId,
@@ -164,7 +148,7 @@ export class TrackerService {
     if (!doc.exists) return null;
 
     const sessions = await this.getTsutsykSessions(id);
-    return this.buildGqlTsutsyk(id, doc.data() as TsutsykDoc, sessions);
+    return this.buildGqlTsutsyk(id, doc.data()!, sessions);
   }
 
   async updateTsutsyk({
@@ -190,7 +174,7 @@ export class TrackerService {
       this.getTsutsykSessions(id),
     ]);
 
-    return this.buildGqlTsutsyk(id, doc.data() as TsutsykDoc, sessions);
+    return this.buildGqlTsutsyk(id, doc.data()!, sessions);
   }
 
   async ensureSessionExists(tsutsykId: string, sessionId: string) {
@@ -243,7 +227,7 @@ export class TrackerService {
 
     return Promise.all(
       snapshot.docs.map(async (doc) => {
-        const data = doc.data() as SessionDoc;
+        const data = doc.data();
         const locations = await this.fetchLocations(doc.id);
         return this.buildGqlSession(doc.id, data, locations, locations.length);
       }),
@@ -257,7 +241,7 @@ export class TrackerService {
     const locations = await this.fetchLocations(sessionId);
     return this.buildGqlSession(
       doc.id,
-      doc.data() as SessionDoc,
+      doc.data()!,
       locations,
       locations.length,
     );
@@ -283,7 +267,7 @@ export class TrackerService {
 
     return this.buildGqlSession(
       doc.id,
-      doc.data() as SessionDoc,
+      doc.data(),
       latestLocation,
       countSnapshot.data().count,
     );
@@ -303,7 +287,7 @@ export class TrackerService {
 
     return this.buildGqlSession(
       doc.id,
-      doc.data() as SessionDoc,
+      doc.data()!,
       locations,
       locations.length,
     );
