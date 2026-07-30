@@ -9,7 +9,7 @@ export const tsutsykConverter: FirestoreDataConverter<TsutsykDoc> = {
   toFirestore(tsutsyk: TsutsykDoc): DocumentData {
     return tsutsyk;
   },
-  fromFirestore(snapshot: QueryDocumentSnapshot): TsutsykDoc {
+  fromFirestore(snapshot: QueryDocumentSnapshot<TsutsykDoc>): TsutsykDoc {
     const data = snapshot.data();
     return {
       createdAt: data.createdAt,
@@ -23,7 +23,7 @@ export const sessionConverter: FirestoreDataConverter<SessionDoc> = {
   toFirestore(session: SessionDoc): DocumentData {
     return session;
   },
-  fromFirestore(snapshot: QueryDocumentSnapshot): SessionDoc {
+  fromFirestore(snapshot: QueryDocumentSnapshot<SessionDoc>): SessionDoc {
     const data = snapshot.data();
     return {
       tsutsykId: data.tsutsykId,
@@ -39,7 +39,7 @@ export const locationConverter: FirestoreDataConverter<LocationDoc> = {
   toFirestore(location: LocationDoc): DocumentData {
     return location;
   },
-  fromFirestore(snapshot: QueryDocumentSnapshot): LocationDoc {
+  fromFirestore(snapshot: QueryDocumentSnapshot<LocationDoc>): LocationDoc {
     const data = snapshot.data();
     return {
       latitude: data.latitude,

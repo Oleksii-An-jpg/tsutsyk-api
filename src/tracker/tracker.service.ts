@@ -148,7 +148,7 @@ export class TrackerService {
     if (!doc.exists) return null;
 
     const sessions = await this.getTsutsykSessions(id);
-    return this.buildGqlTsutsyk(id, doc.data()!, sessions);
+    return this.buildGqlTsutsyk(id, doc.data(), sessions);
   }
 
   async updateTsutsyk({
@@ -174,7 +174,7 @@ export class TrackerService {
       this.getTsutsykSessions(id),
     ]);
 
-    return this.buildGqlTsutsyk(id, doc.data()!, sessions);
+    return this.buildGqlTsutsyk(id, doc.data(), sessions);
   }
 
   async ensureSessionExists(tsutsykId: string, sessionId: string) {
@@ -241,7 +241,7 @@ export class TrackerService {
     const locations = await this.fetchLocations(sessionId);
     return this.buildGqlSession(
       doc.id,
-      doc.data()!,
+      doc.data(),
       locations,
       locations.length,
     );
@@ -257,7 +257,7 @@ export class TrackerService {
 
     if (snapshot.empty) return null;
 
-    const doc = snapshot.docs[0];
+    const [doc] = snapshot.docs;
     const locationsRef = this.firestore.sessionLocations(doc.id);
 
     const [latestLocation, countSnapshot] = await Promise.all([
@@ -287,7 +287,7 @@ export class TrackerService {
 
     return this.buildGqlSession(
       doc.id,
-      doc.data()!,
+      doc.data(),
       locations,
       locations.length,
     );
