@@ -9,7 +9,7 @@ type Tsutsyk {
 
 # Ensure your Location type is also defined
 type Location {
-    id: Int!
+    id: ID!
     latitude: Float!
     longitude: Float!
     timestamp: DateTime!
