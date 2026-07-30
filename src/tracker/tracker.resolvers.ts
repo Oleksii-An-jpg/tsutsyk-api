@@ -1,6 +1,6 @@
 import { Resolver, Query, Mutation, Subscription, Args } from '@nestjs/graphql';
 import { TrackerService } from './tracker.service';
-import { Location, Session } from '../graphql.schema';
+import { Location, Session, Tsutsyk } from '../graphql.schema';
 
 @Resolver('Location')
 export class TrackerResolvers {
@@ -24,6 +24,11 @@ export class TrackerResolvers {
     @Args('tsutsykId') tsutsykId: string,
   ): Promise<Session> {
     return this.trackerService.getActiveSession(tsutsykId);
+  }
+
+  @Query('getTsutsyk')
+  async getTsutsyk(@Args('id') id: string): Promise<Tsutsyk> {
+    return this.trackerService.getTsutsyk(id);
   }
 
   // Location Query
@@ -79,5 +84,19 @@ export class TrackerResolvers {
     });
 
     return newPoint;
+  }
+
+  // Tsutsyk Mutation
+  @Mutation('updateTsutsyk')
+  async updateTsutsyk(
+    @Args('id') id: string,
+    @Args('photoUrl') photoUrl?: string,
+    @Args('alertDistanceMeters') alertDistanceMeters?: number,
+  ): Promise<Tsutsyk> {
+    return this.trackerService.updateTsutsyk({
+      id,
+      photoUrl,
+      alertDistanceMeters,
+    });
   }
 }

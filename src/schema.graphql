@@ -4,6 +4,8 @@ scalar DateTime
 # Represents the GPS tracking device
 type Tsutsyk {
     id: ID!
+    photoUrl: String
+    alertDistanceMeters: Int!
     sessions: [Session!]!
 }
 
@@ -63,6 +65,12 @@ type Mutation {
         lng: Float!
         battery: Int
     ): Location!
+    # Update the tracker's profile photo and/or how far it can wander before alerting.
+    updateTsutsyk(
+        id: ID!,
+        photoUrl: String,
+        alertDistanceMeters: Int
+    ): Tsutsyk!
 }
 
 type Subscription {
