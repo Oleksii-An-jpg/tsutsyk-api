@@ -1,22 +1,93 @@
 import { Injectable } from '@nestjs/common';
 // import { Cron, CronExpression } from '@nestjs/schedule';
-import { PrismaService } from '../prisma/prisma.service';
 import { PubSub } from 'graphql-subscriptions';
+import { Timestamp } from 'firebase-admin/firestore';
+import { FirestoreService } from '../firestore/firestore.service';
 import {
   Location as GqlLocation,
   Session as GqlSession,
   SessionStatus,
 } from '../graphql.schema';
-import { SessionStatus as PrismaSessionStatus } from '@prisma/client';
+
+interface SessionDoc {
+  tsutsykId: string;
+  startTime: Timestamp;
+  endTime: Timestamp | null;
+  status: SessionStatus;
+  lastLocationAt: Timestamp | null;
+}
+
+interface LocationDoc {
+  latitude: number;
+  longitude: number;
+  battery: number | null;
+  timestamp: Timestamp;
+}
+
+interface RawLocation {
+  id: string;
+  sessionId: string;
+  latitude: number;
+  longitude: number;
+  battery: number | null;
+  timestamp: Date;
+}
 
 @Injectable()
 export class TrackerService {
   private readonly pubSub = new PubSub();
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly firestore: FirestoreService) {}
 
-  // Helper to convert Prisma enum to GraphQL enum
-  private mapSessionStatus(status: PrismaSessionStatus): SessionStatus {
-    return status as unknown as SessionStatus;
+  private toRawLocation(
+    sessionId: string,
+    doc: FirebaseFirestore.QueryDocumentSnapshot,
+  ): RawLocation {
+    const data = doc.data() as LocationDoc;
+    return {
+      id: doc.id,
+      sessionId,
+      latitude: data.latitude,
+      longitude: data.longitude,
+      battery: data.battery,
+      timestamp: data.timestamp.toDate(),
+    };
+  }
+
+  private toGqlLocation(raw: RawLocation): GqlLocation {
+    return { ...raw, timestamp: raw.timestamp.toISOString() };
+  }
+
+  private async fetchLocations(
+    sessionId: string,
+    opts?: { desc?: boolean; limit?: number },
+  ): Promise<RawLocation[]> {
+    let query = this.firestore
+      .sessionLocations(sessionId)
+      .orderBy('timestamp', opts?.desc ? 'desc' : 'asc');
+
+    if (opts?.limit) {
+      query = query.limit(opts.limit);
+    }
+
+    const snapshot = await query.get();
+    return snapshot.docs.map((doc) => this.toRawLocation(sessionId, doc));
+  }
+
+  private buildGqlSession(
+    id: string,
+    data: SessionDoc,
+    locations: RawLocation[],
+    locationCount: number,
+  ): GqlSession {
+    return {
+      id,
+      tsutsykId: data.tsutsykId,
+      startTime: data.startTime.toDate().toISOString(),
+      endTime: data.endTime ? data.endTime.toDate().toISOString() : null,
+      status: data.status,
+      locationCount,
+      locations: locations.map((l) => this.toGqlLocation(l)),
+    };
   }
 
   async recordSingleLocation({
@@ -36,20 +107,28 @@ export class TrackerService {
     await this.ensureSessionExists(tsutsykId, sessionId);
 
     // 2. Create the location point
-    const newPoint = await this.prisma.location.create({
-      data: {
-        latitude: lat,
-        longitude: lng,
-        sessionId: sessionId,
-        battery: battery,
-        timestamp: new Date(),
-      },
-    });
-
-    const gqlPoint: GqlLocation = {
-      ...newPoint,
-      timestamp: newPoint.timestamp.toISOString(),
+    const now = Timestamp.now();
+    const locationRef = this.firestore.sessionLocations(sessionId).doc();
+    const locationData: LocationDoc = {
+      latitude: lat,
+      longitude: lng,
+      battery: battery ?? null,
+      timestamp: now,
     };
+
+    await Promise.all([
+      locationRef.set(locationData),
+      this.firestore.sessions.doc(sessionId).update({ lastLocationAt: now }),
+    ]);
+
+    const gqlPoint = this.toGqlLocation({
+      id: locationRef.id,
+      sessionId,
+      latitude: locationData.latitude,
+      longitude: locationData.longitude,
+      battery: locationData.battery,
+      timestamp: now.toDate(),
+    });
 
     // 3. Publish to subscribers
     await this.pubSub.publish('locationUpdates', { locationUpdates: gqlPoint });
@@ -58,154 +137,124 @@ export class TrackerService {
   }
 
   async ensureSessionExists(tsutsykId: string, sessionId: string) {
-    const existing = await this.prisma.session.findUnique({
-      where: { id: sessionId },
-    });
+    const sessionRef = this.firestore.sessions.doc(sessionId);
+    const tsutsykRef = this.firestore.tsutsyks.doc(tsutsykId);
 
-    if (existing) return; // already created, nothing to do
+    await this.firestore.db.runTransaction(async (tx) => {
+      const existing = await tx.get(sessionRef);
+      if (existing.exists) return; // already created, nothing to do
 
-    // New session — close any other active ones first
-    await this.prisma.session.updateMany({
-      where: {
+      const [tsutsykSnap, activeSessions] = await Promise.all([
+        tx.get(tsutsykRef),
+        tx.get(
+          this.firestore.sessions
+            .where('tsutsykId', '==', tsutsykId)
+            .where('status', '==', SessionStatus.ACTIVE),
+        ),
+      ]);
+
+      const now = Timestamp.now();
+
+      // New session — close any other active ones first
+      for (const doc of activeSessions.docs) {
+        tx.update(doc.ref, {
+          status: SessionStatus.COMPLETED,
+          endTime: now,
+        });
+      }
+
+      if (!tsutsykSnap.exists) {
+        tx.set(tsutsykRef, { createdAt: now });
+      }
+
+      const newSession: SessionDoc = {
         tsutsykId,
+        startTime: now,
+        endTime: null,
         status: SessionStatus.ACTIVE,
-      },
-      data: {
-        status: SessionStatus.COMPLETED,
-        endTime: new Date(),
-      },
-    });
-
-    await this.prisma.session.create({
-      data: {
-        id: sessionId,
-        status: SessionStatus.ACTIVE,
-        tsutsyk: {
-          connectOrCreate: {
-            where: { id: tsutsykId },
-            create: { id: tsutsykId },
-          },
-        },
-      },
+        lastLocationAt: null,
+      };
+      tx.set(sessionRef, newSession);
     });
   }
 
   async getTsutsykSessions(tsutsykId: string): Promise<GqlSession[]> {
-    const sessions = await this.prisma.session.findMany({
-      where: { tsutsykId },
-      include: {
-        locations: {
-          orderBy: { timestamp: 'asc' },
-        },
-      },
-      orderBy: { startTime: 'desc' },
-    });
+    const snapshot = await this.firestore.sessions
+      .where('tsutsykId', '==', tsutsykId)
+      .orderBy('startTime', 'desc')
+      .get();
 
-    return sessions.map((s) => ({
-      id: s.id,
-      tsutsykId: s.tsutsykId,
-      startTime: s.startTime.toISOString(),
-      endTime: s.endTime?.toISOString() || null,
-      status: this.mapSessionStatus(s.status),
-      locationCount: s.locations.length,
-      locations: s.locations.map((l) => ({
-        ...l,
-        timestamp: l.timestamp.toISOString(),
-      })),
-    }));
+    return Promise.all(
+      snapshot.docs.map(async (doc) => {
+        const data = doc.data() as SessionDoc;
+        const locations = await this.fetchLocations(doc.id);
+        return this.buildGqlSession(doc.id, data, locations, locations.length);
+      }),
+    );
   }
 
   async getSession(sessionId: string): Promise<GqlSession | null> {
-    const session = await this.prisma.session.findUnique({
-      where: { id: sessionId },
-      include: {
-        locations: {
-          orderBy: { timestamp: 'asc' },
-        },
-      },
-    });
+    const doc = await this.firestore.sessions.doc(sessionId).get();
+    if (!doc.exists) return null;
 
-    if (!session) return null;
-
-    return {
-      id: session.id,
-      tsutsykId: session.tsutsykId,
-      startTime: session.startTime.toISOString(),
-      endTime: session.endTime?.toISOString() || null,
-      status: this.mapSessionStatus(session.status),
-      locationCount: session.locations.length,
-      locations: session.locations.map((l) => ({
-        ...l,
-        timestamp: l.timestamp.toISOString(),
-      })),
-    };
+    const locations = await this.fetchLocations(sessionId);
+    return this.buildGqlSession(
+      doc.id,
+      doc.data() as SessionDoc,
+      locations,
+      locations.length,
+    );
   }
 
   async getActiveSession(tsutsykId: string): Promise<GqlSession | null> {
-    const session = await this.prisma.session.findFirst({
-      where: {
-        tsutsykId,
-        status: SessionStatus.ACTIVE,
-      },
-      include: {
-        locations: {
-          orderBy: { timestamp: 'desc' },
-          take: 1, // Just latest location for active session
-        },
-      },
-      orderBy: { startTime: 'desc' },
-    });
+    const snapshot = await this.firestore.sessions
+      .where('tsutsykId', '==', tsutsykId)
+      .where('status', '==', SessionStatus.ACTIVE)
+      .orderBy('startTime', 'desc')
+      .limit(1)
+      .get();
 
-    if (!session) return null;
+    if (snapshot.empty) return null;
 
-    return {
-      id: session.id,
-      tsutsykId: session.tsutsykId,
-      startTime: session.startTime.toISOString(),
-      endTime: null,
-      status: this.mapSessionStatus(session.status),
-      locationCount: await this.prisma.location.count({
-        where: { sessionId: session.id },
-      }),
-      locations: session.locations.map((l) => ({
-        ...l,
-        timestamp: l.timestamp.toISOString(),
-      })),
-    };
+    const doc = snapshot.docs[0];
+    const locationsRef = this.firestore.sessionLocations(doc.id);
+
+    const [latestLocation, countSnapshot] = await Promise.all([
+      this.fetchLocations(doc.id, { desc: true, limit: 1 }),
+      locationsRef.count().get(),
+    ]);
+
+    return this.buildGqlSession(
+      doc.id,
+      doc.data() as SessionDoc,
+      latestLocation,
+      countSnapshot.data().count,
+    );
   }
 
   async endSession(sessionId: string): Promise<GqlSession> {
-    const session = await this.prisma.session.update({
-      where: { id: sessionId },
-      data: {
-        status: SessionStatus.COMPLETED,
-        endTime: new Date(),
-      },
-      include: {
-        locations: true,
-      },
+    const sessionRef = this.firestore.sessions.doc(sessionId);
+    const now = Timestamp.now();
+
+    await sessionRef.update({
+      status: SessionStatus.COMPLETED,
+      endTime: now,
     });
 
-    return {
-      id: session.id,
-      tsutsykId: session.tsutsykId,
-      startTime: session.startTime.toISOString(),
-      endTime: session.endTime?.toISOString() || null,
-      status: this.mapSessionStatus(session.status),
-      locationCount: session.locations.length,
-      locations: session.locations.map((l) => ({
-        ...l,
-        timestamp: l.timestamp.toISOString(),
-      })),
-    };
+    const doc = await sessionRef.get();
+    const locations = await this.fetchLocations(sessionId);
+
+    return this.buildGqlSession(
+      doc.id,
+      doc.data() as SessionDoc,
+      locations,
+      locations.length,
+    );
   }
 
   // Existing methods...
-  async getLocationHistory(sessionId: string) {
-    return this.prisma.location.findMany({
-      where: { sessionId },
-      orderBy: { timestamp: 'asc' },
-    });
+  async getLocationHistory(sessionId: string): Promise<RawLocation[]> {
+    return this.fetchLocations(sessionId);
   }
 
   async autoEndInactiveSessions() {
@@ -213,41 +262,24 @@ export class TrackerService {
     const threshold = new Date();
     threshold.setMinutes(threshold.getMinutes() - thresholdMinutes);
 
-    // Find active sessions with no recent locations
-    const inactiveSessions = await this.prisma.session.findMany({
-      where: {
-        status: SessionStatus.ACTIVE,
-        locations: {
-          some: {},
-          every: {
-            timestamp: {
-              lt: threshold, // All locations older than threshold
-            },
-          },
-        },
-      },
-      include: {
-        locations: {
-          orderBy: { timestamp: 'desc' },
-          take: 1,
-        },
-      },
-    });
+    // Find active sessions whose last known location is older than the threshold
+    const inactiveSessions = await this.firestore.sessions
+      .where('status', '==', SessionStatus.ACTIVE)
+      .where('lastLocationAt', '<', Timestamp.fromDate(threshold))
+      .get();
 
     // End each inactive session
-    for (const session of inactiveSessions) {
-      await this.prisma.session.update({
-        where: { id: session.id },
-        data: {
-          status: SessionStatus.COMPLETED,
-          endTime: new Date(),
-        },
+    const now = Timestamp.now();
+    for (const doc of inactiveSessions.docs) {
+      await doc.ref.update({
+        status: SessionStatus.COMPLETED,
+        endTime: now,
       });
 
-      console.log(`Auto-ended inactive session: ${session.id}`);
+      console.log(`Auto-ended inactive session: ${doc.id}`);
     }
 
-    return inactiveSessions.length;
+    return inactiveSessions.size;
   }
 
   // @Cron(CronExpression.EVERY_5_MINUTES)
