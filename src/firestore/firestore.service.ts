@@ -5,7 +5,7 @@ import {
   tsutsykConverter,
   sessionConverter,
   locationConverter,
-} from './firestore-converter';
+} from './converter';
 
 const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'tsutsyk-firestore';
 const PROJECT_ID =
