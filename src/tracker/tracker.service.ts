@@ -139,6 +139,7 @@ export class TrackerService {
       photoUrl: data.photoUrl ?? null,
       alertDistanceMeters:
         data.alertDistanceMeters ?? DEFAULT_ALERT_DISTANCE_METERS,
+      claimed: data.claimed,
       sessions,
     };
   }
@@ -205,7 +206,14 @@ export class TrackerService {
       }
 
       if (!tsutsykSnap.exists) {
-        tx.set(tsutsykRef, { createdAt: now });
+        // Plug-and-play devices that never went through /gadgets/provision
+        // (or old ones from before it existed) are already in active use.
+        tx.set(tsutsykRef, {
+          createdAt: now,
+          claimed: true,
+          claimedByUid: null,
+          claimedAt: null,
+        });
       }
 
       const newSession: SessionDoc = {

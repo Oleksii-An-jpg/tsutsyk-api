@@ -5,12 +5,14 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { DateTimeResolver, DateResolver } from 'graphql-scalars';
 import { TrackerModule } from './tracker/tracker.module';
+import { GadgetsModule } from './gadgets/gadgets.module';
 import { SessionStatus } from '@prisma/client';
 
 @Module({
   imports: [
     ConfigModule.forRoot(),
     TrackerModule,
+    GadgetsModule,
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
       typePaths: ['./**/*.graphql'],

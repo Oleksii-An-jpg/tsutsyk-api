@@ -8,5 +8,6 @@ import { ScheduleModule } from '@nestjs/schedule';
   providers: [TrackerResolvers, TrackerService],
   imports: [FirestoreModule, ScheduleModule.forRoot()],
   controllers: [],
+  exports: [TrackerService],
 })
 export class TrackerModule {}

@@ -6,7 +6,15 @@ type Tsutsyk {
     id: ID!
     photoUrl: String
     alertDistanceMeters: Int!
+    claimed: Boolean!
     sessions: [Session!]!
+}
+
+# Lightweight status for the claim page — avoids fetching sessions
+# just to know whether a gadget id exists and is already claimed.
+type GadgetStatus {
+    id: ID!
+    claimed: Boolean!
 }
 
 # Ensure your Location type is also defined
@@ -49,6 +57,10 @@ type Query {
 
     # Optional: add a query to get the tracker details
     getTsutsyk(id: ID!): Tsutsyk
+
+    # Look up a gadget id from a claim QR code before/after sign-in.
+    # Returns null if the id was never provisioned.
+    getGadgetStatus(id: ID!): GadgetStatus
 }
 
 type Mutation {
@@ -71,6 +83,9 @@ type Mutation {
         photoUrl: String,
         alertDistanceMeters: Int
     ): Tsutsyk!
+    # Links a provisioned-but-unclaimed gadget id to the signed-in account.
+    # Requires an admin-role bearer token; fails if already claimed by someone else.
+    claimGadget(id: ID!): Tsutsyk!
 }
 
 type Subscription {

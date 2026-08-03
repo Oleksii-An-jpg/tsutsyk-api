@@ -15,6 +15,12 @@ export const tsutsykConverter: FirestoreDataConverter<TsutsykDoc> = {
       createdAt: data.createdAt,
       photoUrl: data.photoUrl,
       alertDistanceMeters: data.alertDistanceMeters,
+      // Docs created before the provisioning flow existed (seeded/legacy
+      // trackers) were never meant to go through a claim step — treat them
+      // as already claimed so they keep working and can't be claimed anew.
+      claimed: data.claimed ?? true,
+      claimedByUid: data.claimedByUid ?? null,
+      claimedAt: data.claimedAt ?? null,
     };
   },
 };

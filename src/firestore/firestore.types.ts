@@ -5,6 +5,9 @@ export interface TsutsykDoc {
   createdAt: Timestamp;
   photoUrl?: string | null;
   alertDistanceMeters?: number | null;
+  claimed: boolean;
+  claimedByUid: string | null;
+  claimedAt: Timestamp | null;
 }
 
 export interface SessionDoc {

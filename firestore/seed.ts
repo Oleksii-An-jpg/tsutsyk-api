@@ -52,7 +52,12 @@ async function main() {
 
   console.log('Creating Tsutsyk...');
   const tsutsykId = 'tsutsyk-odesa-01';
-  await firestore.tsutsyks.doc(tsutsykId).set({ createdAt: Timestamp.now() });
+  await firestore.tsutsyks.doc(tsutsykId).set({
+    createdAt: Timestamp.now(),
+    claimed: true,
+    claimedByUid: null,
+    claimedAt: null,
+  });
 
   console.log('Seeding Session 1: Morning Commute (Completed)...');
   await seedSession(
