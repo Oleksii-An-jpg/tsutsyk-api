@@ -6,7 +6,7 @@
 //   npm run generate:batch -- --count=100
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { customAlphabet } from 'nanoid';
+import { randomInt } from 'crypto';
 import * as QRCode from 'qrcode';
 import { Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { getFirebaseAdminApp } from '../src/firebase/firebase-admin.app';
@@ -16,7 +16,14 @@ import { tsutsykConverter } from '../src/firestore/converter';
 // printed/etched onto physical units and read back by support staff.
 const ID_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz';
 const ID_LENGTH = 10;
-const generateId = customAlphabet(ID_ALPHABET, ID_LENGTH);
+
+function generateId(): string {
+  let id = '';
+  for (let i = 0; i < ID_LENGTH; i++) {
+    id += ID_ALPHABET[randomInt(ID_ALPHABET.length)];
+  }
+  return id;
+}
 
 const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'tsutsyk-firestore';
 const BASE_URL = process.env.TSUTSYK_BASE_URL || 'https://tsutsyk.live/tsutsyk';
