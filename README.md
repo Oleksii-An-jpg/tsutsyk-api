@@ -32,7 +32,7 @@ $ npm install
 ```
 
 ```bash
-$ npx prisma generate
+$ npm run generate:typings
 ```
 
 ```bash
