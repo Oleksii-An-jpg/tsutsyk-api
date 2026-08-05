@@ -4,9 +4,21 @@ scalar DateTime
 # Represents the GPS tracking device
 type Tsutsyk {
     id: ID!
+    name: String
     photoUrl: String
+    claimed: Boolean!
     alertDistanceMeters: Int!
     sessions: [Session!]!
+}
+
+# The subset of a Tsutsyk's details that are safe to show to an
+# unauthenticated scanner of its public tsutsyk.live/tsutsyk/<id> page —
+# no session/location history.
+type TsutsykPublicProfile {
+    id: ID!
+    claimed: Boolean!
+    name: String
+    photoUrl: String
 }
 
 # Ensure your Location type is also defined
@@ -49,6 +61,14 @@ type Query {
 
     # Optional: add a query to get the tracker details
     getTsutsyk(id: ID!): Tsutsyk
+
+    # Public, unauthenticated lookup used by the tsutsyk.live/tsutsyk/<id>
+    # landing page — to decide whether to show the onboarding flow or the
+    # public profile, and to render that profile. Never exposes sessions.
+    getTsutsykPublicProfile(id: ID!): TsutsykPublicProfile
+
+    # The Tsutsyks owned by the caller (requires auth).
+    getMyTsutsyks: [Tsutsyk!]!
 }
 
 type Mutation {
@@ -66,10 +86,19 @@ type Mutation {
         battery: Int
     ): Location!
     # Update the tracker's profile photo and/or how far it can wander before alerting.
+    # Requires auth; caller must own the Tsutsyk.
     updateTsutsyk(
         id: ID!,
         photoUrl: String,
         alertDistanceMeters: Int
+    ): Tsutsyk!
+
+    # First-scan onboarding: claims an unclaimed Tsutsyk for the caller.
+    # Requires auth. Fails if the Tsutsyk is already claimed by someone else.
+    claimTsutsyk(
+        id: ID!,
+        name: String!,
+        photoUrl: String
     ): Tsutsyk!
 }
 

@@ -1,6 +1,14 @@
 import { Resolver, Query, Mutation, Subscription, Args } from '@nestjs/graphql';
+import { UseGuards } from '@nestjs/common';
 import { TrackerService } from './tracker.service';
-import { Location, Session, Tsutsyk } from '../graphql.schema';
+import {
+  Location,
+  Session,
+  Tsutsyk,
+  TsutsykPublicProfile,
+} from '../graphql.schema';
+import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @Resolver('Location')
 export class TrackerResolvers {
@@ -29,6 +37,19 @@ export class TrackerResolvers {
   @Query('getTsutsyk')
   async getTsutsyk(@Args('id') id: string): Promise<Tsutsyk> {
     return this.trackerService.getTsutsyk(id);
+  }
+
+  @Query('getTsutsykPublicProfile')
+  async getTsutsykPublicProfile(
+    @Args('id') id: string,
+  ): Promise<TsutsykPublicProfile> {
+    return this.trackerService.getTsutsykPublicProfile(id);
+  }
+
+  @UseGuards(FirebaseAuthGuard)
+  @Query('getMyTsutsyks')
+  async getMyTsutsyks(@CurrentUser() uid: string): Promise<Tsutsyk[]> {
+    return this.trackerService.getMyTsutsyks(uid);
   }
 
   // Location Query
@@ -87,16 +108,30 @@ export class TrackerResolvers {
   }
 
   // Tsutsyk Mutation
+  @UseGuards(FirebaseAuthGuard)
   @Mutation('updateTsutsyk')
   async updateTsutsyk(
+    @CurrentUser() uid: string,
     @Args('id') id: string,
     @Args('photoUrl') photoUrl?: string,
     @Args('alertDistanceMeters') alertDistanceMeters?: number,
   ): Promise<Tsutsyk> {
     return this.trackerService.updateTsutsyk({
       id,
+      uid,
       photoUrl,
       alertDistanceMeters,
     });
+  }
+
+  @UseGuards(FirebaseAuthGuard)
+  @Mutation('claimTsutsyk')
+  async claimTsutsyk(
+    @CurrentUser() uid: string,
+    @Args('id') id: string,
+    @Args('name') name: string,
+    @Args('photoUrl') photoUrl?: string,
+  ): Promise<Tsutsyk> {
+    return this.trackerService.claimTsutsyk({ id, uid, name, photoUrl });
   }
 }

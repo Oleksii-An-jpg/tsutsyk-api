@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 // import { Cron, CronExpression } from '@nestjs/schedule';
 import { PubSub } from 'graphql-subscriptions';
 import { QueryDocumentSnapshot, Timestamp } from 'firebase-admin/firestore';
@@ -13,6 +17,7 @@ import {
   Session as GqlSession,
   SessionStatus,
   Tsutsyk as GqlTsutsyk,
+  TsutsykPublicProfile as GqlTsutsykPublicProfile,
 } from '../graphql.schema';
 
 export const DEFAULT_ALERT_DISTANCE_METERS = 100;
@@ -136,7 +141,9 @@ export class TrackerService {
   ): GqlTsutsyk {
     return {
       id,
+      name: data.name ?? null,
       photoUrl: data.photoUrl ?? null,
+      claimed: data.claimed,
       alertDistanceMeters:
         data.alertDistanceMeters ?? DEFAULT_ALERT_DISTANCE_METERS,
       sessions,
@@ -151,16 +158,101 @@ export class TrackerService {
     return this.buildGqlTsutsyk(id, doc.data(), sessions);
   }
 
+  // Public, unauthenticated lookup for the tsutsyk.live/tsutsyk/<id> landing
+  // page. Deliberately returns only name/photo/claimed — never sessions —
+  // since this can be called by anyone who scans the QR code.
+  async getTsutsykPublicProfile(
+    id: string,
+  ): Promise<GqlTsutsykPublicProfile | null> {
+    const doc = await this.firestore.tsutsyks.doc(id).get();
+    if (!doc.exists) return null;
+
+    const data = doc.data();
+    return {
+      id,
+      claimed: data.claimed,
+      name: data.name ?? null,
+      photoUrl: data.photoUrl ?? null,
+    };
+  }
+
+  async getMyTsutsyks(uid: string): Promise<GqlTsutsyk[]> {
+    const snapshot = await this.firestore.tsutsyks
+      .where('ownerUid', '==', uid)
+      .get();
+
+    return Promise.all(
+      snapshot.docs.map(async (doc) => {
+        const sessions = await this.getTsutsykSessions(doc.id);
+        return this.buildGqlTsutsyk(doc.id, doc.data(), sessions);
+      }),
+    );
+  }
+
+  // First-scan onboarding: atomically claims an unclaimed (or not-yet-
+  // provisioned) Tsutsyk for the caller. Runs in a transaction so two
+  // simultaneous scans of the same fresh unit can't both "win".
+  async claimTsutsyk({
+    id,
+    uid,
+    name,
+    photoUrl,
+  }: {
+    id: string;
+    uid: string;
+    name: string;
+    photoUrl?: string | null;
+  }): Promise<GqlTsutsyk> {
+    const tsutsykRef = this.firestore.tsutsyks.doc(id);
+
+    await this.firestore.db.runTransaction(async (tx) => {
+      const snap = await tx.get(tsutsykRef);
+
+      if (snap.exists && snap.data().claimed) {
+        throw new ConflictException('This Tsutsyk has already been claimed');
+      }
+
+      const now = Timestamp.now();
+      const update: Partial<TsutsykDoc> = {
+        claimed: true,
+        ownerUid: uid,
+        name,
+        claimedAt: now,
+      };
+      if (photoUrl !== undefined) update.photoUrl = photoUrl;
+
+      if (snap.exists) {
+        tx.set(tsutsykRef, update, { merge: true });
+      } else {
+        tx.set(tsutsykRef, { ...update, createdAt: now } as TsutsykDoc);
+      }
+    });
+
+    const [doc, sessions] = await Promise.all([
+      tsutsykRef.get(),
+      this.getTsutsykSessions(id),
+    ]);
+
+    return this.buildGqlTsutsyk(id, doc.data(), sessions);
+  }
+
   async updateTsutsyk({
     id,
+    uid,
     photoUrl,
     alertDistanceMeters,
   }: {
     id: string;
+    uid: string;
     photoUrl?: string | null;
     alertDistanceMeters?: number | null;
   }): Promise<GqlTsutsyk> {
     const tsutsykRef = this.firestore.tsutsyks.doc(id);
+
+    const existing = await tsutsykRef.get();
+    if (!existing.exists || existing.data().ownerUid !== uid) {
+      throw new ForbiddenException('You do not own this Tsutsyk');
+    }
 
     const update: Partial<TsutsykDoc> = {};
     if (photoUrl !== undefined) update.photoUrl = photoUrl;
@@ -205,7 +297,7 @@ export class TrackerService {
       }
 
       if (!tsutsykSnap.exists) {
-        tx.set(tsutsykRef, { createdAt: now });
+        tx.set(tsutsykRef, { createdAt: now, claimed: false });
       }
 
       const newSession: SessionDoc = {

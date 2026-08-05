@@ -19,6 +19,7 @@ import { SessionStatus } from '@prisma/client';
           path: '/graphql',
         },
       },
+      context: ({ req }: { req: unknown }) => ({ req }),
       introspection: true,
       resolvers: {
         DateTime: DateTimeResolver,

@@ -24,7 +24,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "firestore:emulator": "firebase emulators:start --only firestore",
-    "seed:firestore": "FIRESTORE_EMULATOR_HOST=localhost:8080 ts-node firestore/seed.ts"
+    "seed:firestore": "FIRESTORE_EMULATOR_HOST=localhost:8080 ts-node firestore/seed.ts",
+    "generate:batch": "ts-node scripts/generate-batch.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
@@ -50,10 +51,12 @@
     "graphql-scalars": "^1.25.0",
     "graphql-subscriptions": "^3.0.0",
     "install": "^0.13.0",
+    "nanoid": "^5.1.16",
     "npm": "^11.12.1",
     "passport": "^0.7.0",
     "passport-custom": "^1.1.1",
     "passport-jwt": "^4.0.1",
+    "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
@@ -68,6 +71,7 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^22.10.7",
     "@types/passport-jwt": "^4.0.1",
+    "@types/qrcode": "^1.5.6",
     "@types/supertest": "^6.0.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
