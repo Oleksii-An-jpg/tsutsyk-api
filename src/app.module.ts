@@ -2,10 +2,9 @@ import { Module } from '@nestjs/common';
 import { GraphQLModule } from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
 import { DateTimeResolver, DateResolver } from 'graphql-scalars';
 import { TrackerModule } from './tracker/tracker.module';
-import { SessionStatus } from '@prisma/client';
+import { SessionStatus } from './graphql.schema';
 
 @Module({
   imports: [
@@ -19,6 +18,7 @@ import { SessionStatus } from '@prisma/client';
           path: '/graphql',
         },
       },
+      context: ({ req }: { req: unknown }) => ({ req }),
       introspection: true,
       resolvers: {
         DateTime: DateTimeResolver,
@@ -30,11 +30,5 @@ import { SessionStatus } from '@prisma/client';
       },
     }),
   ],
-  // providers: [
-  //   {
-  //     provide: APP_GUARD,
-  //     useClass: GqlAuthGuard,
-  //   },
-  // ],
 })
 export class AppModule {}

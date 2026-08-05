@@ -9,9 +9,9 @@
     "node": "24.x.x"
   },
   "scripts": {
-    "prebuild": "DATABASE_URL=placeholder npx prisma generate && npm run generate:typings",
+    "prebuild": "npm run generate:typings",
     "build": "nest build",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"prisma.config.ts\" \"prisma/seed.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"[",
     "generate:typings": "ts-node generate-typings.ts",
     "start": "node dist/main",
     "start:dev": "nest start --watch",
@@ -24,10 +24,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "firestore:emulator": "firebase emulators:start --only firestore",
-    "seed:firestore": "FIRESTORE_EMULATOR_HOST=localhost:8080 ts-node firestore/seed.ts"
-  },
-  "prisma": {
-    "seed": "ts-node prisma/seed.ts"
+    "seed:firestore": "FIRESTORE_EMULATOR_HOST=localhost:8080 ts-node firestore/seed.ts",
+    "generate:batch": "ts-node scripts/generate-batch.ts"
   },
   "dependencies": {
     "@apollo/server": "^5.2.0",
@@ -41,7 +39,6 @@
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/schedule": "^6.1.1",
-    "@prisma/client": "^6.19.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
     "dataloader": "^2.2.3",
@@ -50,10 +47,12 @@
     "graphql-scalars": "^1.25.0",
     "graphql-subscriptions": "^3.0.0",
     "install": "^0.13.0",
+    "nanoid": "^5.1.16",
     "npm": "^11.12.1",
     "passport": "^0.7.0",
     "passport-custom": "^1.1.1",
     "passport-jwt": "^4.0.1",
+    "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
@@ -68,6 +67,7 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^22.10.7",
     "@types/passport-jwt": "^4.0.1",
+    "@types/qrcode": "^1.5.6",
     "@types/supertest": "^6.0.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
@@ -76,7 +76,6 @@
     "globals": "^16.0.0",
     "jest": "^30.0.0",
     "prettier": "^3.4.2",
-    "prisma": "^6.19.1",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.5",

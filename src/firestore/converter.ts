@@ -13,8 +13,15 @@ export const tsutsykConverter: FirestoreDataConverter<TsutsykDoc> = {
     const data = snapshot.data();
     return {
       createdAt: data.createdAt,
+      // Docs created before the claiming feature existed have no `claimed`
+      // field — treat them as already claimed rather than bouncing an
+      // in-use tracker back into the onboarding flow.
+      claimed: data.claimed ?? true,
+      ownerUid: data.ownerUid,
+      name: data.name,
       photoUrl: data.photoUrl,
       alertDistanceMeters: data.alertDistanceMeters,
+      claimedAt: data.claimedAt,
     };
   },
 };
