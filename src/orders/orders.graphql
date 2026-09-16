@@ -1,0 +1,226 @@
+# ─── Orders ──────────────────────────────────────────────────────────────
+# Everything a customer needs to buy a Tsutsyk and then live with that
+# purchase: pay, pay again after an invoice expires, correct where it should
+# be delivered, follow it, cancel it, and — when it was bought without an
+# account — attach it to one afterwards.
+
+# Where the order is in its life, independent of the money.
+enum OrderStatus {
+    # Placed, invoice open, nothing paid yet.
+    PENDING_PAYMENT
+    # monobank confirmed the money. Ours to build.
+    PAID
+    # Being assembled by hand.
+    IN_ASSEMBLY
+    # Handed to the carrier.
+    SHIPPED
+    DELIVERED
+    CANCELLED
+    # Money returned, whether we cancelled it or monobank reversed it.
+    REFUNDED
+}
+
+# monobank's invoice status, mirrored as we hear about it. Null until the
+# first webhook (or status poll) arrives.
+enum PaymentStatus {
+    CREATED
+    PROCESSING
+    HOLD
+    SUCCESS
+    FAILURE
+    REVERSED
+    EXPIRED
+}
+
+enum DeliveryMethod {
+    NOVA_POSHTA_BRANCH
+    NOVA_POSHTA_COURIER
+    UKRPOSHTA
+    PICKUP
+}
+
+# Who caused a timeline entry.
+enum OrderActor {
+    CUSTOMER
+    MONOBANK
+    SYSTEM
+}
+
+# A line of the order, priced when the order was placed so a later price
+# change never rewrites what somebody already agreed to pay.
+type OrderItem {
+    productId: String!
+    name: String!
+    # Minor units (kopiykas), as monobank counts money.
+    unitPrice: Int!
+    quantity: Int!
+    sum: Int!
+    unit: String!
+    image: String
+}
+
+type OrderDelivery {
+    method: DeliveryMethod!
+    recipientName: String!
+    phone: String!
+    city: String
+    # Nova Poshta / Ukrposhta branch number.
+    branch: String
+    # Street address, for courier delivery.
+    address: String
+    comment: String
+}
+
+type OrderEvent {
+    at: DateTime!
+    status: OrderStatus!
+    actor: OrderActor!
+    note: String
+}
+
+type Order {
+    # Also the monobank `reference`, echoed back on every webhook.
+    id: ID!
+    status: OrderStatus!
+    paymentStatus: PaymentStatus
+    items: [OrderItem!]!
+    # Total in minor units (kopiykas).
+    amount: Int!
+    # ISO 4217 numeric currency code. 980 is UAH.
+    currency: Int!
+    contactPhone: String
+    contactEmail: String
+    delivery: OrderDelivery
+    trackingNumber: String
+    invoiceId: String
+    # The monobank payment page for the current invoice, while one is open.
+    paymentPageUrl: String
+    failureReason: String
+    cancelReason: String
+    # Ids of the units shipped against this order, once they are assigned.
+    tsutsykIds: [String!]!
+    events: [OrderEvent!]!
+    # Whether the caller may still change the delivery details.
+    editable: Boolean!
+    # Whether the caller may still cancel it.
+    cancellable: Boolean!
+    # Whether it still needs paying — a fresh invoice can be opened.
+    payable: Boolean!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    paidAt: DateTime
+}
+
+# An order plus where to send the buyer to pay for it.
+type OrderPayment {
+    order: Order!
+    invoiceId: String!
+    pageUrl: String!
+}
+
+# What someone who only has an order number and a phone may see. No items,
+# no amounts, no contact details — this is answerable without signing in.
+type OrderTracking {
+    id: ID!
+    status: OrderStatus!
+    paymentStatus: PaymentStatus
+    trackingNumber: String
+    updatedAt: DateTime!
+}
+
+# The catalogue, so prices are stated in exactly one place — here — instead
+# of being duplicated into the storefront and drifting.
+type Product {
+    id: ID!
+    name: String!
+    description: String!
+    # Unit price in minor units (kopiykas).
+    price: Int!
+    unit: String!
+    image: String!
+    maxQuantity: Int!
+}
+
+input OrderLineInput {
+    productId: String!
+    quantity: Int!
+}
+
+input OrderContactInput {
+    phone: String!
+    email: String
+}
+
+input DeliveryInput {
+    method: DeliveryMethod!
+    recipientName: String!
+    phone: String!
+    city: String
+    branch: String
+    address: String
+    comment: String
+}
+
+input PlaceOrderInput {
+    items: [OrderLineInput!]!
+    # Optional: a pre-order can be paid first and addressed later.
+    contact: OrderContactInput
+    delivery: DeliveryInput
+    # Where monobank returns the buyer once they are done, paid or not.
+    # Must be on an allowed origin; defaults to the storefront.
+    redirectUrl: String
+}
+
+extend type Query {
+    # The catalogue. Unauthenticated — this is the storefront.
+    getProducts: [Product!]!
+
+    # Orders belonging to the caller, newest first. Requires auth.
+    getMyOrders: [Order!]!
+
+    # One order. Requires auth; caller must own it.
+    getOrder(id: ID!): Order
+
+    # Guest lookup: order number plus the phone on the order. Deliberately
+    # thin, since anyone may call it.
+    getOrderTracking(id: ID!, phone: String!): OrderTracking
+}
+
+extend type Mutation {
+    # Prices the basket server-side, opens a monobank invoice and answers
+    # with the page to send the buyer to. Works signed in or not; signed in,
+    # the order is attached to the caller straight away.
+    placeOrder(input: PlaceOrderInput!): OrderPayment!
+
+    # A new invoice for an order that was never paid — the first one expired,
+    # failed, or was abandoned. Requires auth; caller must own it.
+    retryOrderPayment(orderId: ID!, redirectUrl: String): OrderPayment!
+
+    # Attaches an order placed without an account to the caller's account.
+    # The phone must match the one on the order when it has one.
+    claimOrder(orderId: ID!, phone: String): Order!
+
+    # Correct the delivery details, until the order ships.
+    updateOrderDelivery(orderId: ID!, input: DeliveryInput!): Order!
+
+    # Correct the phone/email we reach the customer on.
+    updateOrderContact(orderId: ID!, input: OrderContactInput!): Order!
+
+    # Cancels the order. An unpaid invoice is withdrawn so it cannot be paid
+    # afterwards; a paid one is refunded through monobank.
+    cancelOrder(orderId: ID!, reason: String): Order!
+
+    # Asks monobank for the invoice's current status and applies it. The one
+    # way to observe `expired`, which never sends a webhook.
+    refreshOrderPayment(orderId: ID!): Order!
+}
+
+extend type Subscription {
+    # Live order status — the webhook lands in this process, so a customer
+    # watching the page sees the payment confirm without reloading.
+    #
+    # Deliberately the thin tracking view: subscriptions arrive over a socket
+    # that carries no bearer token, so this is guarded by knowing the order
+    # number alone. Anything private is behind `getOrder`.
+    orderUpdates(orderId: ID!): OrderTracking!
+}
