@@ -14,6 +14,12 @@ export interface TsutsykDoc {
   name?: string | null;
   photoUrl?: string | null;
   alertDistanceMeters?: number | null;
+  /**
+   * alerts.in.ua oblast uid whose air raid alerts this tracker follows.
+   * Null/absent means the owner has not chosen one, and the tracker stays on
+   * its everyday reporting cadence.
+   */
+  alertRegionUid?: number | null;
   claimedAt?: Timestamp | null;
 }
 

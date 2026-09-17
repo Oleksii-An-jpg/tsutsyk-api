@@ -1,6 +1,26 @@
 scalar Date
 scalar DateTime
 
+# Air raid alert state for an oblast, as reported by alerts.in.ua.
+#
+# UNKNOWN is a real answer, not a missing one: the feed is unreachable, the
+# last reading has aged out, or no region has been chosen. It must never be
+# rendered as "no alert" — saying "quiet" when we do not know is the one
+# mistake this feature cannot afford.
+enum AirRaidStatus {
+    ACTIVE
+    PARTLY
+    NO_ALERT
+    UNKNOWN
+}
+
+# One of the 27 oblast-level regions alerts.in.ua reports on.
+type AlertRegion {
+    # alerts.in.ua's stable location uid.
+    uid: Int!
+    title: String!
+}
+
 # Represents the GPS tracking device
 type Tsutsyk {
     id: ID!
@@ -8,6 +28,13 @@ type Tsutsyk {
     photoUrl: String
     claimed: Boolean!
     alertDistanceMeters: Int!
+    # The oblast whose air raid alerts this tracker follows. Null until the
+    # owner picks one, and while it is null the tracker keeps its everyday
+    # reporting cadence — we would rather do nothing than guess a region and
+    # follow another part of the country's alerts.
+    alertRegion: AlertRegion
+    # Live alert state for `alertRegion`, UNKNOWN when no region is set.
+    airRaidStatus: AirRaidStatus!
     sessions: [Session!]!
 }
 
@@ -69,6 +96,10 @@ type Query {
 
     # The Tsutsyks owned by the caller (requires auth).
     getMyTsutsyks: [Tsutsyk!]!
+
+    # The regions a tracker can be pointed at, for the owner's picker.
+    # Static, and ordered the way alerts.in.ua lists them.
+    getAlertRegions: [AlertRegion!]!
 }
 
 type Mutation {
@@ -85,12 +116,16 @@ type Mutation {
         lng: Float!
         battery: Int
     ): Location!
-    # Update the tracker's profile photo and/or how far it can wander before alerting.
+    # Update the tracker's profile photo, how far it can wander before
+    # alerting, and which oblast's air raid alerts it follows.
     # Requires auth; caller must own the Tsutsyk.
+    # `alertRegionUid` must be one of `getAlertRegions`; pass null to clear it
+    # and put the tracker back on its everyday cadence.
     updateTsutsyk(
         id: ID!,
         photoUrl: String,
-        alertDistanceMeters: Int
+        alertDistanceMeters: Int,
+        alertRegionUid: Int
     ): Tsutsyk!
 
     # First-scan onboarding: claims an unclaimed Tsutsyk for the caller.

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -13,14 +14,27 @@ import {
   LocationDoc,
 } from '../firestore/firestore.types';
 import {
+  AirRaidStatus,
+  AlertRegion as GqlAlertRegion,
   Location as GqlLocation,
   Session as GqlSession,
   SessionStatus,
   Tsutsyk as GqlTsutsyk,
   TsutsykPublicProfile as GqlTsutsykPublicProfile,
 } from '../graphql.schema';
+import { AlertStatus, AlertsService } from '../alerts/alerts.service';
+import { OBLASTS, findOblast, isKnownOblastUid } from '../alerts/oblasts';
+import { ReportingPolicy, resolveReportingPolicy } from './reporting-policy';
 
 export const DEFAULT_ALERT_DISTANCE_METERS = 100;
+
+/** Our internal alert vocabulary, as the schema spells it. */
+const AIR_RAID_STATUS: Readonly<Record<AlertStatus, AirRaidStatus>> = {
+  active: AirRaidStatus.ACTIVE,
+  partly: AirRaidStatus.PARTLY,
+  no_alert: AirRaidStatus.NO_ALERT,
+  unknown: AirRaidStatus.UNKNOWN,
+};
 
 interface RawLocation {
   id: string;
@@ -34,7 +48,10 @@ interface RawLocation {
 @Injectable()
 export class TrackerService {
   private readonly pubSub = new PubSub();
-  constructor(private readonly firestore: FirestoreService) {}
+  constructor(
+    private readonly firestore: FirestoreService,
+    private readonly alerts: AlertsService,
+  ) {}
 
   private toRawLocation(
     sessionId: string,
@@ -139,6 +156,13 @@ export class TrackerService {
     data: TsutsykDoc,
     sessions: GqlSession[],
   ): GqlTsutsyk {
+    // A uid we no longer recognise (alerts.in.ua retired it, or the doc was
+    // hand-edited) reads as no region at all rather than as a silent zero:
+    // better an owner who can see the picker is unset than one who thinks
+    // their tracker is watching a region it is not.
+    const oblast =
+      data.alertRegionUid != null ? findOblast(data.alertRegionUid) : undefined;
+
     return {
       id,
       name: data.name ?? null,
@@ -146,7 +170,36 @@ export class TrackerService {
       claimed: data.claimed,
       alertDistanceMeters:
         data.alertDistanceMeters ?? DEFAULT_ALERT_DISTANCE_METERS,
+      alertRegion: oblast ? { uid: oblast.uid, title: oblast.title } : null,
+      airRaidStatus: AIR_RAID_STATUS[this.alerts.getStatus(oblast?.uid)],
       sessions,
+    };
+  }
+
+  /** The oblast list behind the owner's region picker. */
+  listAlertRegions(): GqlAlertRegion[] {
+    return OBLASTS.map(({ uid, title }) => ({ uid, title }));
+  }
+
+  /**
+   * The cadence a given tracker should currently be reporting at.
+   *
+   * Reads the tracker's chosen oblast and asks the alert feed about it. A
+   * tracker we have never seen, or one with no region set, gets the everyday
+   * cadence — an unknown device is not a reason to refuse an answer, since the
+   * answer is what keeps it reporting at all.
+   */
+  async resolveReportingPolicyFor(
+    tsutsykId: string,
+    batteryPercent: number | null,
+  ): Promise<{ policy: ReportingPolicy; alertStatus: AlertStatus }> {
+    const doc = await this.firestore.tsutsyks.doc(tsutsykId).get();
+    const regionUid = doc.exists ? (doc.data().alertRegionUid ?? null) : null;
+    const alertStatus = this.alerts.getStatus(regionUid);
+
+    return {
+      policy: resolveReportingPolicy({ alertStatus, batteryPercent }),
+      alertStatus,
     };
   }
 
@@ -241,11 +294,13 @@ export class TrackerService {
     uid,
     photoUrl,
     alertDistanceMeters,
+    alertRegionUid,
   }: {
     id: string;
     uid: string;
     photoUrl?: string | null;
     alertDistanceMeters?: number | null;
+    alertRegionUid?: number | null;
   }): Promise<GqlTsutsyk> {
     const tsutsykRef = this.firestore.tsutsyks.doc(id);
 
@@ -258,6 +313,17 @@ export class TrackerService {
     if (photoUrl !== undefined) update.photoUrl = photoUrl;
     if (alertDistanceMeters !== undefined)
       update.alertDistanceMeters = alertDistanceMeters;
+    if (alertRegionUid !== undefined) {
+      // Refuse a uid we cannot follow rather than storing it and quietly
+      // never raising an alert for it. A raion uid is the likely mistake:
+      // alerts.in.ua knows it, but the oblast feed does not carry it.
+      if (alertRegionUid !== null && !isKnownOblastUid(alertRegionUid)) {
+        throw new BadRequestException(
+          `${alertRegionUid} is not one of the regions in getAlertRegions`,
+        );
+      }
+      update.alertRegionUid = alertRegionUid;
+    }
 
     await tsutsykRef.set(update, { merge: true });
 
