@@ -10,6 +10,12 @@ import { getFirebaseAdminApp } from '../firebase/firebase-admin.app';
 
 export interface AuthenticatedRequest {
   uid?: string;
+  /**
+   * What Firebase knows about the caller. Worth carrying: an order needs a
+   * way to reach its customer, and a verified phone or email beats one typed
+   * into a form — the delivery phone may well be the recipient's, not theirs.
+   */
+  account?: { email: string | null; phone: string | null };
 }
 
 @Injectable()
@@ -31,6 +37,10 @@ export class FirebaseAuthGuard implements CanActivate {
     try {
       const decoded = await getAuth(getFirebaseAdminApp()).verifyIdToken(token);
       req.uid = decoded.uid;
+      req.account = {
+        email: decoded.email ?? null,
+        phone: decoded.phone_number ?? null,
+      };
       return true;
     } catch {
       throw new UnauthorizedException('Invalid or expired token');

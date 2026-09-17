@@ -12,3 +12,19 @@ export const CurrentUser = createParamDecorator(
     return req.uid;
   },
 );
+
+/**
+ * The email and phone Firebase has for the caller, either of which may be
+ * null depending on how they signed in.
+ *
+ * Read from the verified token rather than asked for, so an order always has
+ * some way of reaching the person who placed it.
+ */
+export const CurrentUserContact = createParamDecorator(
+  (_data: unknown, context: ExecutionContext) => {
+    const req = GqlExecutionContext.create(context).getContext<{
+      req: AuthenticatedRequest;
+    }>().req;
+    return req?.account ?? { email: null, phone: null };
+  },
+);

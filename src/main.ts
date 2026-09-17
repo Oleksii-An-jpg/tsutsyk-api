@@ -2,7 +2,10 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody keeps the untouched request bytes around, which the monobank
+  // webhook needs: its signature covers exactly what was sent, and a
+  // re-serialised body would never verify.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   app.enableCors({
     origin: [
       'http://localhost:3000',

@@ -3,7 +3,12 @@ import {
   FirestoreDataConverter,
   QueryDocumentSnapshot,
 } from 'firebase-admin/firestore';
-import { LocationDoc, SessionDoc, TsutsykDoc } from './firestore.types';
+import {
+  LocationDoc,
+  OrderDoc,
+  SessionDoc,
+  TsutsykDoc,
+} from './firestore.types';
 
 export const tsutsykConverter: FirestoreDataConverter<TsutsykDoc> = {
   toFirestore(tsutsyk: TsutsykDoc): DocumentData {
@@ -53,6 +58,39 @@ export const locationConverter: FirestoreDataConverter<LocationDoc> = {
       longitude: data.longitude,
       battery: data.battery,
       timestamp: data.timestamp,
+    };
+  },
+};
+
+export const orderConverter: FirestoreDataConverter<OrderDoc> = {
+  toFirestore(order: OrderDoc): DocumentData {
+    return order;
+  },
+  fromFirestore(snapshot: QueryDocumentSnapshot<OrderDoc>): OrderDoc {
+    const data = snapshot.data();
+    return {
+      ownerUid: data.ownerUid ?? null,
+      contactPhone: data.contactPhone ?? null,
+      contactEmail: data.contactEmail ?? null,
+      // Lists are read back defensively: a half-written order is still worth
+      // showing its owner, and an absent array would blow up the resolver.
+      items: data.items ?? [],
+      amount: data.amount,
+      currency: data.currency,
+      status: data.status,
+      paymentStatus: data.paymentStatus ?? null,
+      invoiceId: data.invoiceId ?? null,
+      paymentPageUrl: data.paymentPageUrl ?? null,
+      paymentModifiedDate: data.paymentModifiedDate ?? null,
+      failureReason: data.failureReason ?? null,
+      cancelReason: data.cancelReason ?? null,
+      delivery: data.delivery ?? null,
+      trackingNumber: data.trackingNumber ?? null,
+      tsutsykIds: data.tsutsykIds ?? [],
+      events: data.events ?? [],
+      createdAt: data.createdAt,
+      updatedAt: data.updatedAt ?? data.createdAt,
+      paidAt: data.paidAt ?? null,
     };
   },
 };

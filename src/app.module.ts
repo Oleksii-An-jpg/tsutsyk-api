@@ -2,14 +2,20 @@ import { Module } from '@nestjs/common';
 import { GraphQLModule } from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { DateTimeResolver, DateResolver } from 'graphql-scalars';
 import { TrackerModule } from './tracker/tracker.module';
+import { OrdersModule } from './orders/orders.module';
 import { SessionStatus } from './graphql.schema';
 
 @Module({
   imports: [
     ConfigModule.forRoot(),
+    // Registered once, here: a second forRoot() would set up a second
+    // scheduler explorer and fire every @Cron twice.
+    ScheduleModule.forRoot(),
     TrackerModule,
+    OrdersModule,
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
       typePaths: ['./**/*.graphql'],
