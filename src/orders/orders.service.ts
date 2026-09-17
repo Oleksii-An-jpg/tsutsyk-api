@@ -112,7 +112,10 @@ export class OrdersService {
   }
 
   async getOrder(id: string, uid: string): Promise<GqlOrder | null> {
-    const doc = await this.firestore.orders.doc(id).get();
+    // Normalised like every other lookup: the order number reaches us from a
+    // URL the customer may well have typed, and a lower-case one must find
+    // the same order rather than look like a missing one.
+    const doc = await this.firestore.orders.doc(normalizeOrderId(id)).get();
     if (!doc.exists) return null;
 
     const data = doc.data();
@@ -138,7 +141,7 @@ export class OrdersService {
     id: string,
     phone: string,
   ): Promise<GqlOrderTracking | null> {
-    const doc = await this.firestore.orders.doc(id.trim().toUpperCase()).get();
+    const doc = await this.firestore.orders.doc(normalizeOrderId(id)).get();
     if (!doc.exists) return null;
 
     const data = doc.data();

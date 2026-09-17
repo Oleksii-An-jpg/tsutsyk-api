@@ -662,6 +662,20 @@ describe('guest orders', () => {
     expect(await orders.getOrder(id, 'uid-9')).not.toBeNull();
   });
 
+  it('is found by its number in whatever case it was typed', async () => {
+    const { orders, id } = await guestOrder();
+    await orders.claimOrder({ orderId: id, uid: 'uid-9', phone: '0671234567' });
+
+    const order = await orders.getOrder(id.toLowerCase(), 'uid-9');
+    expect(order?.id).toBe(id);
+
+    const tracking = await orders.getOrderTracking(
+      ` ${id.toLowerCase()} `,
+      '0671234567',
+    );
+    expect(tracking?.id).toBe(id);
+  });
+
   it('is not claimed by somebody with the wrong phone', async () => {
     const { orders, id } = await guestOrder();
 
