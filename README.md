@@ -200,6 +200,123 @@ The unit tests cover the parts worth trusting — pricing, ownership, the
 out-of-order webhook rules, refunds — against an in-memory Firestore, so
 `npm test` needs neither credentials nor the emulator.
 
+## Air raid alerts
+
+While a tracker's oblast is under an air raid alert, that tracker is asked to
+report its position every minute instead of every five. This is the feature the
+landing page calls *Розуміє тривогу*.
+
+### How a tracker is told anything
+
+There is exactly one channel from us to a device, and it is the response to the
+device's own fix:
+
+```
+POST /tracker/:tsutsykId/location
+Content-Type: application/json
+
+{ "sessionId": "walk-1", "lat": 50.4501, "lng": 30.5234, "battery": 82 }
+```
+
+```json
+{
+  "locationId": "H7xk...",
+  "reporting": { "intervalSeconds": 60, "reason": "air_raid" },
+  "airRaid": "active"
+}
+```
+
+**The firmware must treat `reporting.intervalSeconds` as the delay before its
+next fix.** Nothing else in this repository can change a device's behaviour, so
+a unit that ignores this field simply does not have the feature.
+
+The downlink rides on the uplink deliberately. A Cat-1 modem's power budget is
+dominated by radio time, so an answer to a request the tracker was already
+making is free, while polling a config endpoint or holding MQTT open is not.
+The cost of that choice is latency: an alert raised at T reaches a device at
+its next check-in, so worst case a tracker keeps the slow cadence for one
+normal interval after the sirens start. Cutting that would mean paying for a
+connection the device holds open, which is the wrong trade for a collar.
+
+`reason` is advisory — useful for a log or an LED — and is one of `normal`,
+`air_raid` or `low_battery`. `airRaid` carries the raw status:
+`active`, `partly`, `no_alert` or `unknown`.
+
+Errors follow the same rule as monobank's webhook: `503` means retry this fix,
+`4xx` means the device sent something wrong and retrying will not help. While a
+fix is failing the device keeps whatever cadence it already has.
+
+### Where the alert state comes from
+
+[alerts.in.ua](https://alerts.in.ua)'s IoT endpoint,
+`GET /v1/iot/active_air_raid_alerts_by_oblast.json`, which answers with 27
+characters — one per oblast, positional, `A`/`P`/`N`. One poller serves every
+tracker; per-device polling would buy nothing and spend rate limit. Requests are
+conditional (`If-Modified-Since`), so a quiet country costs a 304.
+
+`src/alerts/oblasts.ts` holds the position-to-oblast table. **It is the schema**
+— the payload has no keys — and it is transcribed from the official client
+library, with `oblasts.spec.ts` pinning it.
+
+### What happens when the feed fails
+
+This is most of the design, because a tracker that is quietly not accelerating
+looks exactly like one in a quiet oblast.
+
+- A reading older than `ALERTS_STALE_AFTER_MS` (3 min) stops being reported as
+  fact. The oblast reads `unknown`.
+- `unknown` is **not** `no_alert`. It never renders as "quiet" and it never
+  accelerates a tracker — an alerts.in.ua outage must not put every device in
+  the country onto the fast cadence at once.
+- Staleness is asymmetric. A *raised* alert holds for `ALERTS_HOLD_MS` (10 min)
+  past the freshness window before decaying to `unknown`, so losing the feed
+  mid-alert does not withdraw the feature during the emergency it exists for.
+- A malformed payload is discarded and the last good reading is kept to age out
+  normally. A short string would mark the tail of the alphabet quiet, which is
+  the one failure this feature cannot have, so it is a hard parse error.
+- A `429` backs off for ten poll periods.
+
+### Which oblast a tracker follows
+
+The owner picks it: `updateTsutsyk(id:, alertRegionUid:)`, chosen from
+`getAlertRegions`. Until they do, `alertRegion` is null and the tracker keeps
+its everyday cadence.
+
+It is not derived from the tracker's own coordinates, which would be the
+obvious thing. Doing that properly needs oblast boundary polygons and a
+point-in-polygon test; the cheap approximations (nearest centroid, bounding
+boxes) are wrong near every oblast border, and a tracker silently following the
+wrong region's sirens is worse than one that asks. Auto-detection is worth
+doing with real boundary data — it is not worth guessing.
+
+### The battery floor
+
+Below `LOW_BATTERY_PERCENT` (15%) a tracker is not accelerated, alert or not,
+and reports `reason: "low_battery"`. An alert can run for hours, and a device
+still reporting every five minutes is worth more than one that reported every
+minute until it died. A device that sends no battery reading at all is still
+accelerated: the alert is certain, the flat battery is only a possibility.
+
+### Configuration
+
+`ALERTS_IN_UA_TOKEN` turns the feature on; request one at
+[devs.alerts.in.ua](https://devs.alerts.in.ua). Without it the API runs exactly
+as before, every oblast reads `unknown`, and no tracker is ever accelerated —
+the same posture the orders module takes without a monobank token. The rest are
+tuning knobs, documented in `.env.example`.
+
+### Known gaps
+
+- **The firmware is not in this repository.** The server side is complete and
+  tested; whether a given unit honours `reporting.intervalSeconds` is a
+  question for the device build.
+- **Ingest is authenticated only by the tracker id in the path**, which matches
+  the pre-existing `postLocation` mutation. The ids are unguessable, but they
+  are printed on the unit as a QR code, so anyone who photographs a collar can
+  write points for that dog. A per-device secret issued at provisioning time
+  (`scripts/generate-batch.ts`) is the fix; this endpoint does not make the
+  situation worse, but it does not improve it either.
+
 ## Resources
 
 Check out a few resources that may come in handy when working with NestJS:

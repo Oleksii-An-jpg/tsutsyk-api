@@ -2,6 +2,7 @@ import { Resolver, Query, Mutation, Subscription, Args } from '@nestjs/graphql';
 import { UseGuards } from '@nestjs/common';
 import { TrackerService } from './tracker.service';
 import {
+  AlertRegion,
   Location,
   Session,
   Tsutsyk,
@@ -50,6 +51,13 @@ export class TrackerResolvers {
   @Query('getMyTsutsyks')
   async getMyTsutsyks(@CurrentUser() uid: string): Promise<Tsutsyk[]> {
     return this.trackerService.getMyTsutsyks(uid);
+  }
+
+  // Unauthenticated on purpose: it is a static list of Ukrainian oblasts,
+  // and the settings screen needs it to render the picker.
+  @Query('getAlertRegions')
+  getAlertRegions(): AlertRegion[] {
+    return this.trackerService.listAlertRegions();
   }
 
   // Location Query
@@ -115,12 +123,14 @@ export class TrackerResolvers {
     @Args('id') id: string,
     @Args('photoUrl') photoUrl?: string,
     @Args('alertDistanceMeters') alertDistanceMeters?: number,
+    @Args('alertRegionUid') alertRegionUid?: number | null,
   ): Promise<Tsutsyk> {
     return this.trackerService.updateTsutsyk({
       id,
       uid,
       photoUrl,
       alertDistanceMeters,
+      alertRegionUid,
     });
   }
 

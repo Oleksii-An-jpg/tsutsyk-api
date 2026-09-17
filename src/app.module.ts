@@ -4,9 +4,10 @@ import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { DateTimeResolver, DateResolver } from 'graphql-scalars';
+import { AlertsModule } from './alerts/alerts.module';
 import { TrackerModule } from './tracker/tracker.module';
 import { OrdersModule } from './orders/orders.module';
-import { SessionStatus } from './graphql.schema';
+import { AirRaidStatus, SessionStatus } from './graphql.schema';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { SessionStatus } from './graphql.schema';
     // Registered once, here: a second forRoot() would set up a second
     // scheduler explorer and fire every @Cron twice.
     ScheduleModule.forRoot(),
+    AlertsModule,
     TrackerModule,
     OrdersModule,
     GraphQLModule.forRoot<ApolloDriverConfig>({
@@ -32,6 +34,12 @@ import { SessionStatus } from './graphql.schema';
         SessionStatus: {
           ACTIVE: SessionStatus.ACTIVE,
           COMPLETED: SessionStatus.COMPLETED,
+        },
+        AirRaidStatus: {
+          ACTIVE: AirRaidStatus.ACTIVE,
+          PARTLY: AirRaidStatus.PARTLY,
+          NO_ALERT: AirRaidStatus.NO_ALERT,
+          UNKNOWN: AirRaidStatus.UNKNOWN,
         },
       },
     }),

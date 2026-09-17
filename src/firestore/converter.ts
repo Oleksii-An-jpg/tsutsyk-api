@@ -26,6 +26,7 @@ export const tsutsykConverter: FirestoreDataConverter<TsutsykDoc> = {
       name: data.name,
       photoUrl: data.photoUrl,
       alertDistanceMeters: data.alertDistanceMeters,
+      alertRegionUid: data.alertRegionUid,
       claimedAt: data.claimedAt,
     };
   },
