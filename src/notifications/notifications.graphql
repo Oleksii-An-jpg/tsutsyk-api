@@ -1,0 +1,34 @@
+# What a browser needs before it can subscribe to push.
+type PushConfig {
+    # The VAPID public key to hand `pushManager.subscribe`, or null when the
+    # API has no keys configured and push is off.
+    #
+    # Served rather than configured on the storefront too: the public key and
+    # the private key that signs the send are one keypair, and a storefront
+    # holding a stale half fails per device, at the push service, with nothing
+    # in our logs to explain it.
+    publicKey: String
+}
+
+# One browser's Web Push subscription, as `PushSubscription.toJSON()` gives it.
+input PushSubscriptionInput {
+    endpoint: String!
+    p256dh: String!
+    auth: String!
+}
+
+extend type Query {
+    # Unauthenticated: it is a public key, and the notification toggle needs
+    # it before it can ask the browser for permission.
+    getPushConfig: PushConfig!
+}
+
+extend type Mutation {
+    # Remember this browser so the API can reach its owner. Requires auth —
+    # the subscription is filed under the uid in the token, never one the
+    # client names.
+    savePushSubscription(input: PushSubscriptionInput!): Boolean!
+
+    # Forget one browser. Requires auth and ownership of the endpoint.
+    deletePushSubscription(endpoint: String!): Boolean!
+}

@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
 } from '@nestjs/common';
 // import { Cron, CronExpression } from '@nestjs/schedule';
 import { PubSub } from 'graphql-subscriptions';
@@ -24,7 +25,12 @@ import {
 } from '../graphql.schema';
 import { AlertStatus, AlertsService } from '../alerts/alerts.service';
 import { OBLASTS, findOblast, isKnownOblastUid } from '../alerts/oblasts';
-import { ReportingPolicy, resolveReportingPolicy } from './reporting-policy';
+import {
+  ReportingPolicy,
+  batteryEdge,
+  resolveReportingPolicy,
+} from './reporting-policy';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export const DEFAULT_ALERT_DISTANCE_METERS = 100;
 
@@ -47,10 +53,12 @@ interface RawLocation {
 
 @Injectable()
 export class TrackerService {
+  private readonly logger = new Logger(TrackerService.name);
   private readonly pubSub = new PubSub();
   constructor(
     private readonly firestore: FirestoreService,
     private readonly alerts: AlertsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private toRawLocation(
@@ -194,13 +202,65 @@ export class TrackerService {
     batteryPercent: number | null,
   ): Promise<{ policy: ReportingPolicy; alertStatus: AlertStatus }> {
     const doc = await this.firestore.tsutsyks.doc(tsutsykId).get();
-    const regionUid = doc.exists ? (doc.data().alertRegionUid ?? null) : null;
+    const data = doc.exists ? doc.data() : null;
+    const regionUid = data?.alertRegionUid ?? null;
     const alertStatus = this.alerts.getStatus(regionUid);
+
+    // The low-battery warning is settled here because this is the one place
+    // on the device path that already holds both halves — the tracker
+    // document and the reading — and a tracker on a marginal signal is paying
+    // for every millisecond this request stays open. Deliberately not
+    // awaited: the device's answer is its next reporting interval, and it
+    // must not wait on a push service to get it.
+    if (data) {
+      void this.settleBatteryWarning(tsutsykId, data, batteryPercent);
+    }
 
     return {
       policy: resolveReportingPolicy({ alertStatus, batteryPercent }),
       alertStatus,
     };
+  }
+
+  /**
+   * Warns the owner the first time a battery goes low, and re-arms the warning
+   * once it has been charged.
+   *
+   * Never throws and never rejects: it runs detached from the fix that
+   * triggered it, so an unhandled rejection here would be an unhandled
+   * rejection in the process.
+   */
+  private async settleBatteryWarning(
+    tsutsykId: string,
+    data: TsutsykDoc,
+    batteryPercent: number | null,
+  ): Promise<void> {
+    try {
+      const edge = batteryEdge({
+        batteryPercent,
+        alreadyNotified: data.lowBatteryNotified ?? false,
+      });
+      if (edge === 'none') return;
+
+      await this.firestore.tsutsyks
+        .doc(tsutsykId)
+        .set({ lowBatteryNotified: edge === 'notify' }, { merge: true });
+
+      // Only the falling edge is worth a notification. A tracker coming back
+      // off the charger is good news, and good news at 3am is still 3am.
+      if (edge !== 'notify' || !data.ownerUid) return;
+
+      await this.notifications.sendToUser(data.ownerUid, {
+        title: 'Цуцик розряджається',
+        body: `${data.name || 'Цуцик'} — ${batteryPercent}% заряду. Час на зарядку.`,
+        url: '/me',
+        tag: `low-battery-${tsutsykId}`,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `low battery warning for ${tsutsykId} failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   async getTsutsyk(id: string): Promise<GqlTsutsyk | null> {

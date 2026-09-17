@@ -317,6 +317,97 @@ tuning knobs, documented in `.env.example`.
   (`scripts/generate-batch.ts`) is the fix; this endpoint does not make the
   situation worse, but it does not improve it either.
 
+## Push notifications
+
+The API owns push, because the API is what learns things. A raised air raid
+alert and a flat battery both happen whether or not anyone has the app open,
+and this is the process that hears about them.
+
+### Where a subscription lives
+
+`pushSubscriptions`, one document per browser, keyed by a SHA-256 of the push
+endpoint. The hash is doing two jobs: a Firestore document id may not contain
+the `/` an endpoint URL is full of, and hashing makes re-subscribing
+idempotent — browsers re-subscribe on their own schedule, and a subscription
+that landed on a fresh document each time would leave the old one behind for
+us to keep pushing at forever.
+
+| Operation | What it is for |
+| --- | --- |
+| `getPushConfig` | The VAPID public key a browser needs to subscribe |
+| `savePushSubscription` | Remember this browser. Requires auth |
+| `deletePushSubscription` | Forget it. Requires auth and ownership |
+
+The uid comes from the verified token, never from the client, so a
+subscription can only be filed under the person who made it. `delete` checks
+ownership for the mirror-image reason: the endpoint arrives from the client,
+and without the check anyone holding someone else's endpoint could silence
+them.
+
+**The public key is served, not configured twice.** The storefront reads it
+from `getPushConfig` rather than holding its own copy. A public key that does
+not match the private key signing the send fails at the push service, per
+device, with nothing in our logs to say why — so there is one copy of it.
+
+### What gets sent
+
+- **An air raid alert raised or lifted** in the oblast a tracker follows. The
+  device already learns this — it is why the cadence changes — but until now
+  nothing told the person, which is the half that matters at 4am.
+- **A low battery**, the first time a tracker crosses `LOW_BATTERY_PERCENT`.
+
+Both are edge-triggered, and both have to be, for the same reason in two
+shapes. A tracker reports every five minutes, so warning on the *level* would
+be twelve notifications an hour for as long as the battery stayed flat;
+`batteryEdge` warns on the way down and re-arms only above
+`BATTERY_RECOVERED_PERCENT` (25%), because a reading wobbling either side of a
+single threshold would otherwise ring all afternoon. Coming off the charger is
+not itself worth a notification — good news at 3am is still 3am.
+
+The alert edge is detected in `AlertsService` and announced through
+`onTransition`; `AirRaidNotifier` is what listens, looks up who is following
+that oblast, and sends. The poller keeps knowing nothing about Firestore or
+push, and nothing waits on a push service to finish a poll or answer a device.
+
+Two rules that are load-bearing:
+
+- **A restart is not a siren.** The first reading a process takes seeds the
+  baseline silently. Without that, every deploy during an alert would
+  re-announce it to a whole oblast.
+- **Losing the feed is not an all-clear.** Transitions are emitted only for a
+  poll that came back with data. A reading that decays to `unknown` because
+  alerts.in.ua is unreachable announces nothing — saying "відбій" when we do
+  not know is the one mistake this feature cannot make.
+
+Dead endpoints prune themselves: a push service answering 404 or 410 means
+that browser is gone for good, and the subscription goes with it. Any other
+failure is a bad minute, not a dead browser, and the subscription stays.
+
+### Configuration
+
+`VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` turn the feature on — generate a
+pair with `npx web-push generate-vapid-keys`. Without them subscriptions are
+still stored and every send is a no-op, so the toggle keeps working and
+nothing has to be re-subscribed once the keys arrive.
+
+Rotating the keypair invalidates every subscription already made: each one is
+bound to the public key it was created with. Owners would silently stop
+receiving notifications until they toggled them off and on again, so the keys
+are worth keeping somewhere durable.
+
+### Known gaps
+
+- **The geofence is still client-side.** `alertDistanceMeters` is evaluated in
+  the browser, against the owner's own position, by a component that only
+  exists while the map is on screen — so "Цуцик забіг задалеко" can only reach
+  someone already looking at it. Moving it into `recordSingleLocation` needs an
+  anchor point on the tracker (the owner's phone is not something the API can
+  see), and that is a product decision — a yard the dog leaves, or a distance
+  from a person — not just a port.
+- **Nothing pushes about orders yet.** The monobank webhook is the obvious
+  place to announce a payment confirming or an order shipping, and it already
+  runs server-side; it is just not wired to this.
+
 ## Resources
 
 Check out a few resources that may come in handy when working with NestJS:

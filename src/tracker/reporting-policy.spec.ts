@@ -3,6 +3,8 @@ import {
   LOW_BATTERY_PERCENT,
   NORMAL_INTERVAL_SECONDS,
   resolveReportingPolicy,
+  batteryEdge,
+  BATTERY_RECOVERED_PERCENT,
 } from './reporting-policy';
 
 describe('resolveReportingPolicy', () => {
@@ -68,4 +70,111 @@ describe('resolveReportingPolicy', () => {
       });
     },
   );
+});
+
+describe('batteryEdge', () => {
+  it('warns the first time a battery goes low', () => {
+    expect(
+      batteryEdge({
+        batteryPercent: LOW_BATTERY_PERCENT - 1,
+        alreadyNotified: false,
+      }),
+    ).toBe('notify');
+  });
+
+  // The device reports every five minutes. Level-triggering this would be
+  // twelve notifications an hour for as long as the battery stayed flat.
+  it('says it once, not every fix', () => {
+    expect(
+      batteryEdge({
+        batteryPercent: LOW_BATTERY_PERCENT - 1,
+        alreadyNotified: true,
+      }),
+    ).toBe('none');
+  });
+
+  it('re-arms once the tracker has been charged', () => {
+    expect(
+      batteryEdge({
+        batteryPercent: BATTERY_RECOVERED_PERCENT,
+        alreadyNotified: true,
+      }),
+    ).toBe('clear');
+  });
+
+  // The gap between the two thresholds is the whole point: a reading wobbling
+  // either side of 15% must not re-arm and re-fire all afternoon.
+  it('does not re-arm in the gap between low and recovered', () => {
+    for (
+      let percent = LOW_BATTERY_PERCENT;
+      percent < BATTERY_RECOVERED_PERCENT;
+      percent++
+    ) {
+      expect(
+        batteryEdge({ batteryPercent: percent, alreadyNotified: true }),
+      ).toBe('none');
+    }
+  });
+
+  it('warns only once across a run of jittery readings', () => {
+    let notified = false;
+    let warnings = 0;
+    // A battery sitting on the threshold, as GPS-era hardware reports it.
+    for (const percent of [16, 14, 15, 14, 16, 13, 15, 14]) {
+      const edge = batteryEdge({
+        batteryPercent: percent,
+        alreadyNotified: notified,
+      });
+      if (edge === 'notify') {
+        warnings++;
+        notified = true;
+      }
+      if (edge === 'clear') notified = false;
+    }
+    expect(warnings).toBe(1);
+  });
+
+  it('warns again after a genuine charge and discharge', () => {
+    let notified = false;
+    let warnings = 0;
+    for (const percent of [14, 10, 90, 40, 26, 14, 9]) {
+      const edge = batteryEdge({
+        batteryPercent: percent,
+        alreadyNotified: notified,
+      });
+      if (edge === 'notify') {
+        warnings++;
+        notified = true;
+      }
+      if (edge === 'clear') notified = false;
+    }
+    expect(warnings).toBe(2);
+  });
+
+  // A fix without a battery reading is neither a recovery nor a warning, and
+  // plenty of them arrive that way.
+  it.each([[true], [false]])(
+    'reads nothing into a missing battery (notified: %s)',
+    (alreadyNotified) => {
+      expect(batteryEdge({ batteryPercent: null, alreadyNotified })).toBe(
+        'none',
+      );
+      expect(batteryEdge({ alreadyNotified })).toBe('none');
+    },
+  );
+
+  it('treats the threshold itself as not yet low', () => {
+    expect(
+      batteryEdge({
+        batteryPercent: LOW_BATTERY_PERCENT,
+        alreadyNotified: false,
+      }),
+    ).toBe('none');
+  });
+
+  it('warns on a flat battery', () => {
+    expect(batteryEdge({ batteryPercent: 0, alreadyNotified: false })).toBe(
+      'notify',
+    );
+  });
 });

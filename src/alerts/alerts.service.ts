@@ -48,6 +48,24 @@ const DEFAULT_STALE_AFTER_MS = 180_000;
  */
 const DEFAULT_HOLD_MS = 600_000;
 
+/**
+ * One oblast crossing into or out of an alert, as of a fresh reading.
+ *
+ * Emitted only for a poll that actually came back with data. Losing contact
+ * with alerts.in.ua decays a reading to `unknown`, which is not an all-clear
+ * and must never be announced as one.
+ */
+export interface AlertTransition {
+  readonly uid: number;
+  readonly status: AlertStatus;
+  /** True when the alert was just raised, false when it was just lifted. */
+  readonly alerted: boolean;
+}
+
+export type AlertTransitionListener = (
+  transitions: readonly AlertTransition[],
+) => void;
+
 interface Snapshot {
   readonly statuses: ReadonlyMap<number, AlertStatus>;
   /** When we last *confirmed* this reading — a 304 counts, it means "still current". */
@@ -114,6 +132,15 @@ export class AlertsService implements OnModuleInit, OnModuleDestroy {
   private readonly holdMs = readMs('ALERTS_HOLD_MS', DEFAULT_HOLD_MS);
 
   private snapshot: Snapshot | null = null;
+  /**
+   * Whether each oblast was alerted as of the last reading we actually got.
+   *
+   * Separate from `snapshot` because it is an edge detector, not a cache: it
+   * only ever moves on a successful poll, so a feed outage produces no
+   * transitions rather than a countryside's worth of false all-clears.
+   */
+  private readonly alerted = new Map<number, boolean>();
+  private readonly listeners = new Set<AlertTransitionListener>();
   private lastModified: string | null = null;
   private timer: NodeJS.Timeout | null = null;
   /** Set by a 429 so we stop hammering a feed that has asked us not to. */
@@ -172,6 +199,16 @@ export class AlertsService implements OnModuleInit, OnModuleDestroy {
     return status === 'active' || status === 'partly';
   }
 
+  /**
+   * Registers a listener for alerts being raised and lifted.
+   *
+   * @returns an unsubscribe function.
+   */
+  onTransition(listener: AlertTransitionListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
   /** Exposed for the health/debug surface and for tests. */
   getSnapshotAge(now = Date.now()): number | null {
     return this.snapshot ? now - this.snapshot.confirmedAt : null;
@@ -206,12 +243,49 @@ export class AlertsService implements OnModuleInit, OnModuleDestroy {
       this.snapshot = { statuses, confirmedAt: Date.now() };
       this.lastModified = response.headers.get('Last-Modified');
       this.backoffUntil = 0;
+      this.emitTransitions(statuses);
     } catch (error) {
       // Includes a parse failure: a payload we cannot read is worse than no
       // payload, so we keep the last good snapshot and let it age out.
       this.logger.warn(
         `air raid alert poll failed: ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+  }
+
+  /**
+   * Compares a fresh reading against the last one and tells anyone listening
+   * which oblasts changed.
+   *
+   * The very first reading of a process seeds the baseline silently. Without
+   * that, every restart during an alert would re-announce it to every owner in
+   * the oblast — a deploy is not a siren.
+   */
+  private emitTransitions(statuses: ReadonlyMap<number, AlertStatus>): void {
+    const seeding = this.alerted.size === 0;
+    const transitions: AlertTransition[] = [];
+
+    for (const [uid, status] of statuses) {
+      const alerted = status === 'active' || status === 'partly';
+      const before = this.alerted.get(uid);
+      this.alerted.set(uid, alerted);
+      if (!seeding && before !== alerted) {
+        transitions.push({ uid, status, alerted });
+      }
+    }
+
+    if (seeding || transitions.length === 0) return;
+
+    for (const listener of this.listeners) {
+      try {
+        listener(transitions);
+      } catch (error) {
+        // A listener that throws is its own problem: the poller's job is to
+        // keep polling, and the next reading must not be lost to it.
+        this.logger.warn(
+          `alert transition listener failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
 
