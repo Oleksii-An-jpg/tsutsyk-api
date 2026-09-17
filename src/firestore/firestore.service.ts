@@ -6,6 +6,7 @@ import {
   sessionConverter,
   locationConverter,
   orderConverter,
+  pushSubscriptionConverter,
 } from './converter';
 
 const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'tsutsyk-firestore';
@@ -28,6 +29,12 @@ export class FirestoreService {
 
   get orders() {
     return this.db.collection('orders').withConverter(orderConverter);
+  }
+
+  get pushSubscriptions() {
+    return this.db
+      .collection('pushSubscriptions')
+      .withConverter(pushSubscriptionConverter);
   }
 
   sessionLocations(sessionId: string) {

@@ -7,6 +7,7 @@ import { DateTimeResolver, DateResolver } from 'graphql-scalars';
 import { AlertsModule } from './alerts/alerts.module';
 import { TrackerModule } from './tracker/tracker.module';
 import { OrdersModule } from './orders/orders.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { AirRaidStatus, SessionStatus } from './graphql.schema';
 
 @Module({
@@ -18,6 +19,7 @@ import { AirRaidStatus, SessionStatus } from './graphql.schema';
     AlertsModule,
     TrackerModule,
     OrdersModule,
+    NotificationsModule,
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
       typePaths: ['./**/*.graphql'],

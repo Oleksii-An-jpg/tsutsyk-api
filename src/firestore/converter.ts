@@ -6,6 +6,7 @@ import {
 import {
   LocationDoc,
   OrderDoc,
+  PushSubscriptionDoc,
   SessionDoc,
   TsutsykDoc,
 } from './firestore.types';
@@ -28,6 +29,7 @@ export const tsutsykConverter: FirestoreDataConverter<TsutsykDoc> = {
       alertDistanceMeters: data.alertDistanceMeters,
       alertRegionUid: data.alertRegionUid,
       claimedAt: data.claimedAt,
+      lowBatteryNotified: data.lowBatteryNotified ?? false,
     };
   },
 };
@@ -95,3 +97,26 @@ export const orderConverter: FirestoreDataConverter<OrderDoc> = {
     };
   },
 };
+
+export const pushSubscriptionConverter: FirestoreDataConverter<PushSubscriptionDoc> =
+  {
+    toFirestore(subscription: PushSubscriptionDoc): DocumentData {
+      return subscription;
+    },
+    fromFirestore(
+      snapshot: QueryDocumentSnapshot<PushSubscriptionDoc>,
+    ): PushSubscriptionDoc {
+      const data = snapshot.data();
+      return {
+        ownerUid: data.ownerUid,
+        endpoint: data.endpoint,
+        keys: data.keys,
+        createdAt: data.createdAt,
+        // Docs written before this field existed fall back to their creation
+        // time rather than to null: "never seen" and "seen when it was made"
+        // are the same thing for a subscription nothing has pushed to yet.
+        lastSeenAt: data.lastSeenAt ?? data.createdAt,
+        userAgent: data.userAgent ?? null,
+      };
+    },
+  };

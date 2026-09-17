@@ -21,6 +21,14 @@ export interface TsutsykDoc {
    */
   alertRegionUid?: number | null;
   claimedAt?: Timestamp | null;
+  /**
+   * Whether the owner has already been told this tracker's battery is low.
+   *
+   * Lives on the document because the warning has to be edge-triggered and a
+   * tracker reports every five minutes: without somewhere to remember that we
+   * have said it, a flat battery would be a notification twelve times an hour.
+   */
+  lowBatteryNotified?: boolean | null;
 }
 
 export interface SessionDoc {
@@ -92,4 +100,29 @@ export interface OrderDoc {
   createdAt: Timestamp;
   updatedAt: Timestamp;
   paidAt: Timestamp | null;
+}
+
+/**
+ * One browser's Web Push subscription.
+ *
+ * Keyed by a hash of the endpoint rather than by uid: a person has as many of
+ * these as they have browsers, and re-subscribing the same one has to land on
+ * the same document or every reinstall would leave a dead endpoint behind for
+ * us to keep pushing at.
+ */
+export interface PushSubscriptionDoc {
+  /** Who this browser belongs to. The only key we fan out by. */
+  ownerUid: string;
+  /** The push service URL. Opaque to us, and the identity of the device. */
+  endpoint: string;
+  /** The keys web-push encrypts the payload with. */
+  keys: { p256dh: string; auth: string };
+  createdAt: Timestamp;
+  /** Last time a send to this endpoint was accepted. */
+  lastSeenAt: Timestamp;
+  /**
+   * What the browser called itself when it subscribed, so an owner listing
+   * their devices sees something other than a base64 blob. Never matched on.
+   */
+  userAgent: string | null;
 }

@@ -274,6 +274,137 @@ describe('AlertsService', () => {
     });
   });
 
+  describe('transitions', () => {
+    /** Polls once per status string and collects everything emitted. */
+    async function drive(...strings: string[]) {
+      const service = new AlertsService();
+      const emitted: { uid: number; alerted: boolean; status: string }[] = [];
+      service.onTransition((transitions) => {
+        emitted.push(...transitions);
+      });
+      for (const body of strings) {
+        fetchMock.mockResolvedValueOnce(response({ body }));
+        await service.poll();
+      }
+      return { service, emitted };
+    }
+
+    // A restart during an alert must not re-announce it to a whole oblast.
+    it('says nothing about the first reading of a process', async () => {
+      const { emitted } = await drive(statusString({ [KYIV]: 'A' }));
+      expect(emitted).toEqual([]);
+    });
+
+    it('reports an alert being raised', async () => {
+      const { emitted } = await drive(
+        statusString(),
+        statusString({ [KYIV]: 'A' }),
+      );
+      expect(emitted).toEqual([{ uid: KYIV, status: 'active', alerted: true }]);
+    });
+
+    it('reports an alert being lifted', async () => {
+      const { emitted } = await drive(
+        statusString({ [KYIV]: 'A' }),
+        statusString(),
+      );
+      expect(emitted).toEqual([
+        { uid: KYIV, status: 'no_alert', alerted: false },
+      ]);
+    });
+
+    // Both mean "there is an alert" — the owner has already been told.
+    it('does not re-announce a partly alert over an active one', async () => {
+      const { emitted } = await drive(
+        statusString({ [KYIV]: 'A' }),
+        statusString({ [KYIV]: 'P' }),
+        statusString({ [KYIV]: 'A' }),
+      );
+      expect(emitted).toEqual([]);
+    });
+
+    it('reports each oblast that moved, and only those', async () => {
+      const { emitted } = await drive(
+        statusString({ [KYIV]: 'A' }),
+        statusString({ [KYIV]: 'A', [LVIV]: 'P' }),
+      );
+      expect(emitted).toEqual([{ uid: LVIV, status: 'partly', alerted: true }]);
+    });
+
+    // An unreachable feed decays a reading to `unknown`, which is not an
+    // all-clear. Announcing one would be the worst failure this module has.
+    it('says nothing when the feed stops answering', async () => {
+      const service = new AlertsService();
+      const emitted: unknown[] = [];
+      service.onTransition((transitions) => emitted.push(...transitions));
+
+      fetchMock.mockResolvedValueOnce(
+        response({ body: statusString({ [KYIV]: 'A' }) }),
+      );
+      await service.poll();
+      fetchMock.mockResolvedValueOnce(
+        response({ body: statusString({ [KYIV]: 'A', [LVIV]: 'A' }) }),
+      );
+      await service.poll();
+      emitted.length = 0;
+
+      fetchMock.mockRejectedValueOnce(new Error('network down'));
+      await service.poll();
+      fetchMock.mockResolvedValueOnce(response({ status: 500 }));
+      await service.poll();
+
+      expect(emitted).toEqual([]);
+    });
+
+    // A 304 is "still current", not a new reading, so nothing has moved.
+    it('says nothing on a 304', async () => {
+      const service = new AlertsService();
+      const emitted: unknown[] = [];
+      fetchMock.mockResolvedValueOnce(
+        response({ body: statusString({ [KYIV]: 'A' }) }),
+      );
+      await service.poll();
+      service.onTransition((transitions) => emitted.push(...transitions));
+
+      fetchMock.mockResolvedValueOnce(response({ status: 304 }));
+      await service.poll();
+
+      expect(emitted).toEqual([]);
+    });
+
+    it('keeps polling when a listener throws', async () => {
+      const service = new AlertsService();
+      service.onTransition(() => {
+        throw new Error('listener exploded');
+      });
+
+      fetchMock.mockResolvedValueOnce(response({ body: statusString() }));
+      await service.poll();
+      fetchMock.mockResolvedValueOnce(
+        response({ body: statusString({ [KYIV]: 'A' }) }),
+      );
+
+      await expect(service.poll()).resolves.toBeUndefined();
+      expect(service.getStatus(KYIV)).toBe('active');
+    });
+
+    it('stops telling a listener that unsubscribed', async () => {
+      const service = new AlertsService();
+      const emitted: unknown[] = [];
+      const off = service.onTransition((t) => emitted.push(...t));
+
+      fetchMock.mockResolvedValueOnce(response({ body: statusString() }));
+      await service.poll();
+      off();
+      fetchMock.mockResolvedValueOnce(
+        response({ body: statusString({ [KYIV]: 'A' }) }),
+      );
+      await service.poll();
+
+      expect(emitted).toEqual([]);
+    });
+  });
+
   it('answers unknown for a uid that is not an oblast', async () => {
     fetchMock.mockResolvedValue(response({ body: statusString() }));
     const service = new AlertsService();
