@@ -120,18 +120,14 @@ export class OrdersService {
 
     const data = doc.data();
     if (data.ownerUid !== uid) {
-      throw new ForbiddenException(
-        data.ownerUid
-          ? 'This order belongs to someone else'
-          : 'This order is not attached to your account yet — claim it first',
-      );
+      throw new ForbiddenException('This order belongs to someone else');
     }
 
     return this.toGqlOrder(doc.id, data);
   }
 
   /**
-   * Guest lookup, by order number and the phone on the order.
+   * Lookup without an account, by order number and the phone on the order.
    *
    * Answers nothing an order number alone unlocks: without a matching phone
    * this is a null, so a guessed id leaks neither the amount nor the
@@ -168,14 +164,21 @@ export class OrdersService {
    * succeeds but whose answer we never see still has somewhere to land: the
    * webhook carries our reference, and a customer is never charged for an
    * order we have no record of.
+   *
+   * An owner and an address are both required. There is no such thing here as
+   * an order we cannot deliver or a customer we cannot reach — and a Tsutsyk
+   * needs an account to be used at all, so the sign-in is a step the buyer
+   * takes either way.
    */
   async placeOrder({
     input,
     uid,
+    account,
     requestOrigin,
   }: {
     input: PlaceOrderInput;
-    uid: string | null;
+    uid: string;
+    account?: { email: string | null; phone: string | null };
     requestOrigin?: string | null;
   }): Promise<GqlOrderPayment> {
     this.assertAcquiringConfigured();
@@ -184,23 +187,28 @@ export class OrdersService {
     const amount = items.reduce((total, item) => total + item.sum, 0);
     const redirectUrl = this.resolveRedirectUrl(input.redirectUrl);
 
-    const delivery = input.delivery ? toDeliveryDoc(input.delivery) : null;
-    if (delivery) assertDeliverable(delivery);
+    if (!input.delivery) {
+      throw new BadRequestException('An order needs delivery details');
+    }
+
+    const delivery = toDeliveryDoc(input.delivery);
+    assertDeliverable(delivery);
 
     if (input.contact?.phone && !isPlausiblePhone(input.contact.phone)) {
       throw new BadRequestException('That does not look like a phone number');
     }
 
     const now = Timestamp.now();
-    // The phone is how a guest order is claimed later, so take it from
-    // wherever the customer gave us one.
-    const phone = input.contact?.phone ?? delivery?.phone ?? null;
-    const contactPhone = phone ? normalizePhone(phone) : null;
+    // Whoever we should call about this order. The delivery phone may be the
+    // recipient's rather than the buyer's, so an explicit contact wins, and
+    // the account's own verified number is the last word.
+    const phone = input.contact?.phone ?? account?.phone ?? delivery.phone;
+    const contactPhone = normalizePhone(phone);
 
     const order: OrderDoc = {
       ownerUid: uid,
       contactPhone,
-      contactEmail: input.contact?.email ?? null,
+      contactEmail: input.contact?.email ?? account?.email ?? null,
       items,
       amount,
       currency: UAH,
@@ -354,72 +362,6 @@ export class OrdersService {
   }
 
   // ─── Managing ─────────────────────────────────────────────────────────
-
-  /**
-   * Attaches an order placed as a guest to the caller's account.
-   *
-   * The landing page sells without an account — asking someone to register
-   * before they have decided to buy loses the sale — so this is how a
-   * purchase becomes something its buyer can manage afterwards.
-   */
-  async claimOrder({
-    orderId,
-    uid,
-    phone,
-  }: {
-    orderId: string;
-    uid: string;
-    phone?: string | null;
-  }): Promise<GqlOrder> {
-    const id = normalizeOrderId(orderId);
-    const ref = this.firestore.orders.doc(id);
-
-    await this.firestore.db.runTransaction(async (tx) => {
-      const snap = await tx.get(ref);
-      if (!snap.exists) throw new NotFoundException('No such order');
-
-      const data = snap.data();
-
-      if (data.ownerUid) {
-        if (data.ownerUid === uid) return; // already theirs — nothing to do
-        throw new ConflictException('This order belongs to someone else');
-      }
-
-      // When the order carries a phone, it has to match: the order id is the
-      // only other secret, and it travels through monobank's redirect.
-      const known = [data.contactPhone, data.delivery?.phone].filter(Boolean);
-      if (
-        known.length &&
-        !known.some((candidate) => samePhone(candidate, phone))
-      ) {
-        throw new ForbiddenException(
-          'That phone number does not match the one on the order',
-        );
-      }
-
-      tx.set(
-        ref,
-        {
-          ownerUid: uid,
-          ...(phone && !data.contactPhone
-            ? { contactPhone: normalizePhone(phone) }
-            : {}),
-          updatedAt: Timestamp.now(),
-          events: [
-            ...data.events,
-            event(
-              data.status,
-              OrderActor.CUSTOMER,
-              'Замовлення прив’язано до акаунта',
-            ),
-          ],
-        },
-        { merge: true },
-      );
-    });
-
-    return this.readAndPublish(id);
-  }
 
   /** Corrects where the order should go. Allowed until it ships. */
   async updateOrderDelivery({
@@ -913,11 +855,7 @@ export class OrdersService {
 
     const data = doc.data();
     if (data.ownerUid !== uid) {
-      throw new ForbiddenException(
-        data.ownerUid
-          ? 'This order belongs to someone else'
-          : 'This order is not attached to your account yet — claim it first',
-      );
+      throw new ForbiddenException('This order belongs to someone else');
     }
 
     return { id, data };

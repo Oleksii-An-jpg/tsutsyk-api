@@ -163,9 +163,12 @@ input DeliveryInput {
 
 input PlaceOrderInput {
     items: [OrderLineInput!]!
-    # Optional: a pre-order can be paid first and addressed later.
+    # Required: there is no such thing as an order we cannot deliver, so the
+    # address is part of placing one rather than something chased afterwards.
+    delivery: DeliveryInput!
+    # Optional. The phone comes from the delivery details and the email from
+    # the account unless they are given here.
     contact: OrderContactInput
-    delivery: DeliveryInput
     # Where monobank returns the buyer once they are done, paid or not.
     # Must be on an allowed origin; defaults to the storefront.
     redirectUrl: String
@@ -181,24 +184,22 @@ extend type Query {
     # One order. Requires auth; caller must own it.
     getOrder(id: ID!): Order
 
-    # Guest lookup: order number plus the phone on the order. Deliberately
-    # thin, since anyone may call it.
+    # Lookup without an account: order number plus the phone on the order.
+    # For the customer who cannot get into their account but wants to know
+    # where the parcel is. Deliberately thin, since anyone may call it.
     getOrderTracking(id: ID!, phone: String!): OrderTracking
 }
 
 extend type Mutation {
     # Prices the basket server-side, opens a monobank invoice and answers
-    # with the page to send the buyer to. Works signed in or not; signed in,
-    # the order is attached to the caller straight away.
+    # with the page to send the buyer to. Requires auth: a Tsutsyk is unusable
+    # without an account anyway, and an order with an owner and an address
+    # from its first write is one we can actually ship.
     placeOrder(input: PlaceOrderInput!): OrderPayment!
 
     # A new invoice for an order that was never paid — the first one expired,
     # failed, or was abandoned. Requires auth; caller must own it.
     retryOrderPayment(orderId: ID!, redirectUrl: String): OrderPayment!
-
-    # Attaches an order placed without an account to the caller's account.
-    # The phone must match the one on the order when it has one.
-    claimOrder(orderId: ID!, phone: String): Order!
 
     # Correct the delivery details, until the order ships.
     updateOrderDelivery(orderId: ID!, input: DeliveryInput!): Order!

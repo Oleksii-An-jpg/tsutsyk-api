@@ -190,8 +190,17 @@ function setup(monobank: FakeMonobank = fakeMonobank()) {
   };
 }
 
+const DELIVERY = {
+  method: DeliveryMethod.NOVA_POSHTA_BRANCH,
+  recipientName: 'Олекса Цуцик',
+  phone: '+380671234567',
+  city: 'Львів',
+  branch: '12',
+};
+
 const ONE_TRACKER: PlaceOrderInput = {
   items: [{ productId: 'tsutsyk-tracker', quantity: 1 }],
+  delivery: DELIVERY,
 };
 
 describe('order helpers', () => {
@@ -267,8 +276,11 @@ describe('placeOrder', () => {
     const { orders, monobank, store } = setup();
 
     const { order, pageUrl } = await orders.placeOrder({
-      input: { items: [{ productId: 'tsutsyk-tracker', quantity: 2 }] },
-      uid: null,
+      input: {
+        ...ONE_TRACKER,
+        items: [{ productId: 'tsutsyk-tracker', quantity: 2 }],
+      },
+      uid: 'uid-1',
     });
 
     expect(order.amount).toBe(980_000);
@@ -289,12 +301,13 @@ describe('placeOrder', () => {
     await expect(
       orders.placeOrder({
         input: {
+          ...ONE_TRACKER,
           items: [
             { productId: 'tsutsyk-tracker', quantity: 2 },
             { productId: 'tsutsyk-tracker', quantity: 2 },
           ],
         },
-        uid: null,
+        uid: 'uid-1',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -303,19 +316,51 @@ describe('placeOrder', () => {
     const { orders } = setup();
     await expect(
       orders.placeOrder({
-        input: { items: [{ productId: 'free-tracker', quantity: 1 }] },
-        uid: null,
+        input: {
+          ...ONE_TRACKER,
+          items: [{ productId: 'free-tracker', quantity: 1 }],
+        },
+        uid: 'uid-1',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('attaches the order to the caller when they are signed in', async () => {
+  it('attaches every order to the caller who placed it', async () => {
     const { orders, store } = setup();
     const { order } = await orders.placeOrder({
       input: ONE_TRACKER,
       uid: 'uid-1',
     });
     expect(store.get(order.id)?.ownerUid).toBe('uid-1');
+  });
+
+  it('refuses an order with nowhere to send it', async () => {
+    const { orders } = setup();
+
+    await expect(
+      orders.placeOrder({
+        input: {
+          items: [{ productId: 'tsutsyk-tracker', quantity: 1 }],
+        } as PlaceOrderInput,
+        uid: 'uid-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('reaches for the account when no contact is given', async () => {
+    const { orders, store } = setup();
+
+    const { order } = await orders.placeOrder({
+      input: ONE_TRACKER,
+      uid: 'uid-1',
+      account: { email: 'hazda@example.com', phone: '+380509999999' },
+    });
+
+    const stored = store.get(order.id);
+    expect(stored?.contactEmail).toBe('hazda@example.com');
+    // The delivery phone may be the recipient's; the account's own is the one
+    // we can be sure reaches the buyer.
+    expect(stored?.contactPhone).toBe('380509999999');
   });
 
   it('refuses delivery details a parcel could not be sent with', async () => {
@@ -332,7 +377,7 @@ describe('placeOrder', () => {
             city: 'Львів',
           },
         },
-        uid: null,
+        uid: 'uid-1',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -342,7 +387,7 @@ describe('placeOrder', () => {
     await expect(
       orders.placeOrder({
         input: { ...ONE_TRACKER, redirectUrl: 'https://evil.example/thanks' },
-        uid: null,
+        uid: 'uid-1',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -351,7 +396,7 @@ describe('placeOrder', () => {
     const { orders, monobank } = setup();
     const { order } = await orders.placeOrder({
       input: { ...ONE_TRACKER, redirectUrl: 'https://tsutsyk.live/' },
-      uid: null,
+      uid: 'uid-1',
     });
 
     expect(monobank.createInvoice).toHaveBeenCalledWith(
@@ -490,10 +535,7 @@ describe('managing an order', () => {
   async function placed(monobank: FakeMonobank = fakeMonobank()) {
     const context = setup(monobank);
     const { order } = await context.orders.placeOrder({
-      input: {
-        ...ONE_TRACKER,
-        contact: { phone: '+380671234567' },
-      },
+      input: ONE_TRACKER,
       uid: 'uid-1',
     });
     return { ...context, id: order.id };
@@ -639,34 +681,20 @@ describe('managing an order', () => {
   });
 });
 
-describe('guest orders', () => {
-  async function guestOrder() {
+describe('following an order without the app', () => {
+  async function placedOrder() {
     const context = setup();
     const { order } = await context.orders.placeOrder({
-      input: { ...ONE_TRACKER, contact: { phone: '+380671234567' } },
-      uid: null,
+      input: ONE_TRACKER,
+      uid: 'uid-1',
     });
     return { ...context, id: order.id };
   }
 
-  it('is claimed by the buyer once they sign in', async () => {
-    const { orders, id } = await guestOrder();
-
-    const order = await orders.claimOrder({
-      orderId: id.toLowerCase(), // typed in by hand, in whatever case
-      uid: 'uid-9',
-      phone: '0671234567',
-    });
-
-    expect(order.id).toBe(id);
-    expect(await orders.getOrder(id, 'uid-9')).not.toBeNull();
-  });
-
   it('is found by its number in whatever case it was typed', async () => {
-    const { orders, id } = await guestOrder();
-    await orders.claimOrder({ orderId: id, uid: 'uid-9', phone: '0671234567' });
+    const { orders, id } = await placedOrder();
 
-    const order = await orders.getOrder(id.toLowerCase(), 'uid-9');
+    const order = await orders.getOrder(id.toLowerCase(), 'uid-1');
     expect(order?.id).toBe(id);
 
     const tracking = await orders.getOrderTracking(
@@ -676,25 +704,8 @@ describe('guest orders', () => {
     expect(tracking?.id).toBe(id);
   });
 
-  it('is not claimed by somebody with the wrong phone', async () => {
-    const { orders, id } = await guestOrder();
-
-    await expect(
-      orders.claimOrder({ orderId: id, uid: 'uid-9', phone: '0670000000' }),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-  });
-
-  it('cannot be claimed twice', async () => {
-    const { orders, id } = await guestOrder();
-    await orders.claimOrder({ orderId: id, uid: 'uid-9', phone: '0671234567' });
-
-    await expect(
-      orders.claimOrder({ orderId: id, uid: 'uid-10', phone: '0671234567' }),
-    ).rejects.toBeInstanceOf(ConflictException);
-  });
-
-  it('can be followed with an order number and a phone, and nothing else', async () => {
-    const { orders, id } = await guestOrder();
+  it('answers an order number and a phone, and nothing else', async () => {
+    const { orders, id } = await placedOrder();
 
     const tracking = await orders.getOrderTracking(id, '+38 067 123 45 67');
     expect(tracking?.status).toBe(OrderStatus.PENDING_PAYMENT);

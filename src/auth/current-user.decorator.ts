@@ -14,17 +14,17 @@ export const CurrentUser = createParamDecorator(
 );
 
 /**
- * The caller's uid, or null when nobody is signed in.
+ * The email and phone Firebase has for the caller, either of which may be
+ * null depending on how they signed in.
  *
- * The counterpart to `CurrentUser` for resolvers behind
- * `OptionalFirebaseAuthGuard`, where "no user" is a normal outcome rather
- * than a rejected request.
+ * Read from the verified token rather than asked for, so an order always has
+ * some way of reaching the person who placed it.
  */
-export const CurrentUserOptional = createParamDecorator(
-  (_data: unknown, context: ExecutionContext): string | null => {
+export const CurrentUserContact = createParamDecorator(
+  (_data: unknown, context: ExecutionContext) => {
     const req = GqlExecutionContext.create(context).getContext<{
       req: AuthenticatedRequest;
     }>().req;
-    return req?.uid ?? null;
+    return req?.account ?? { email: null, phone: null };
   },
 );

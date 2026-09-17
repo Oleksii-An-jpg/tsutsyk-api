@@ -10,9 +10,8 @@ import { UseGuards } from '@nestjs/common';
 import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
 import {
   CurrentUser,
-  CurrentUserOptional,
+  CurrentUserContact,
 } from '../auth/current-user.decorator';
-import { OptionalFirebaseAuthGuard } from '../auth/optional-firebase-auth.guard';
 import {
   DeliveryInput,
   Order,
@@ -81,16 +80,19 @@ export class OrdersResolvers {
 
   // ─── Mutations ────────────────────────────────────────────────────────
 
-  @UseGuards(OptionalFirebaseAuthGuard)
+  @UseGuards(FirebaseAuthGuard)
   @Mutation('placeOrder')
   async placeOrder(
-    @CurrentUserOptional() uid: string | null,
+    @CurrentUser() uid: string,
+    @CurrentUserContact()
+    account: { email: string | null; phone: string | null },
     @Args('input') input: PlaceOrderInput,
     @Context('req') req: RequestLike,
   ): Promise<OrderPayment> {
     return this.orders.placeOrder({
       input,
       uid,
+      account,
       requestOrigin: originOf(req),
     });
   }
@@ -109,16 +111,6 @@ export class OrdersResolvers {
       redirectUrl,
       requestOrigin: originOf(req),
     });
-  }
-
-  @UseGuards(FirebaseAuthGuard)
-  @Mutation('claimOrder')
-  async claimOrder(
-    @CurrentUser() uid: string,
-    @Args('orderId') orderId: string,
-    @Args('phone') phone: string | null,
-  ): Promise<Order> {
-    return this.orders.claimOrder({ orderId, uid, phone });
   }
 
   @UseGuards(FirebaseAuthGuard)

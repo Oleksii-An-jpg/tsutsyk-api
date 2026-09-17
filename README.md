@@ -110,10 +110,9 @@ amount, and it never talks to monobank itself.
 | Operation | What it is for |
 | --- | --- |
 | `getProducts` | The catalogue, priced by the same code that charges for it |
-| `placeOrder` | Buy, signed in or as a guest |
+| `placeOrder` | Buy — requires an account and an address |
 | `getMyOrders` / `getOrder` | Their orders, with the full timeline |
-| `getOrderTracking(id, phone)` | Follow an order without an account |
-| `claimOrder` | Attach a guest order to an account after signing in |
+| `getOrderTracking(id, phone)` | Follow an order without getting into the account |
 | `retryOrderPayment` | A fresh invoice after one expired or failed |
 | `refreshOrderPayment` | Ask monobank what really happened |
 | `updateOrderDelivery` | Correct the address, until it ships |
@@ -121,17 +120,28 @@ amount, and it never talks to monobank itself.
 | `cancelOrder` | Call it off — refunded through monobank if it was paid |
 | `orderUpdates(orderId)` | Live status over the websocket |
 
-Guest checkout is deliberate: asking somebody to register before they have
-decided to buy loses the sale. A guest order carries the phone number from the
-contact or delivery details, and `claimOrder` matches on it — compared on the
-last nine digits, so `+380671234567` and `0671234567` are the same customer.
-An order placed with no contact details at all is claimable by whoever holds
-the order number, which travels only through monobank's redirect.
+### No guest checkout, and no order without an address
 
-Mutations other than `placeOrder` need a Firebase ID token and the caller must
-own the order. `getOrderTracking` and `orderUpdates` are the two deliberate
-exceptions, and both answer with the thin tracking view — status, payment
-status, tracking number — never with a customer's contact details.
+`placeOrder` requires a Firebase ID token and a `delivery` block. Both are
+deliberate, and they are the same decision: an order we cannot deliver, or
+whose customer we cannot reach, is not an order — it is money we have to give
+back. Guest checkout could take that money and, since `updateOrderDelivery`
+needs ownership, could never finish the order without the sign-in it was meant
+to avoid.
+
+The sign-in costs the buyer nothing they were not going to spend: a Tsutsyk is
+unusable without an account — claiming the unit, seeing it on the map, the
+alert radius — so this only moves a step they take anyway to where it also
+solves the address.
+
+The contact of record is the account's own verified phone and email, falling
+back to the delivery phone: the address may be a relative's, but the person we
+call about the order is the person who placed it.
+
+Every mutation needs a token and ownership of the order. `getOrderTracking`
+and `orderUpdates` are the two deliberate exceptions — for the customer locked
+out of their account — and both answer with the thin tracking view: status,
+payment status, tracking number, never contact details.
 
 ### Payment statuses
 
