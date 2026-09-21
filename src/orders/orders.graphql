@@ -232,12 +232,15 @@ extend type Mutation {
     # way to observe `expired`, which never sends a webhook.
     refreshOrderPayment(orderId: ID!): Order!
 
-    # ─── Dispatch ─────────────────────────────────────────────────────────
-    # Admin only — the `admin` custom claim, not ownership. These are the two
-    # points where somebody has physically done something to the parcel, and
-    # the only way an order reaches SHIPPED or DELIVERED. The waybill itself
-    # is created by hand in Nova Poshta's own cabinet; this records its number
-    # so the customer can follow it.
+    # ─── Ours ─────────────────────────────────────────────────────────────
+    # Admin only — the `admin` custom claim, not ownership. Everything above
+    # is authorised by owning the order being changed, which is no help when
+    # the order to be worked belongs to a customer.
+    #
+    # Three of these are dispatch: the points where somebody has physically
+    # done something to the parcel, and the only way an order reaches SHIPPED
+    # or DELIVERED. The waybill itself is created by hand in Nova Poshta's own
+    # cabinet; this records its number so the customer can follow it.
 
     # Takes a paid order off the customer's hands to be put together. The one
     # thing it changes is that the delivery details stop being editable, so
@@ -252,6 +255,16 @@ extend type Mutation {
 
     # Closes out an order the customer has collected. SHIPPED orders only.
     markOrderDelivered(orderId: ID!): Order!
+
+    # Calls off somebody else's order, for when we cannot fill it — or when
+    # the customer asks us to rather than doing it themselves.
+    #
+    # The same act as `cancelOrder`, under the same rules: an unpaid invoice
+    # is withdrawn, a paid one refunded through monobank. What differs is that
+    # the timeline records it as ours, so a customer reading it afterwards can
+    # tell we stopped the order rather than them. `reason` is the customer's
+    # to read, so it is worth writing for them.
+    cancelAnyOrder(orderId: ID!, reason: String): Order!
 }
 
 extend type Subscription {

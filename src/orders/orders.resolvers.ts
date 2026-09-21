@@ -171,9 +171,9 @@ export class OrdersResolvers {
     return this.orders.refreshOrderPayment(orderId, uid);
   }
 
-  // ─── Dispatch ─────────────────────────────────────────────────────────
+  // ─── Mutations, as us ─────────────────────────────────────────────────
   // `AdminGuard` rather than `FirebaseAuthGuard`: these are ours to call, not
-  // the customer's, and it is the one thing in the schema not authorised by
+  // the customer's, and they are the ones in the schema not authorised by
   // owning the thing being changed. The uid is passed on only to be recorded
   // — the guard has already decided the question.
 
@@ -207,6 +207,16 @@ export class OrdersResolvers {
     @Args('orderId') orderId: string,
   ): Promise<Order> {
     return this.orders.markOrderDelivered({ orderId, byUid: uid });
+  }
+
+  @UseGuards(AdminGuard)
+  @Mutation('cancelAnyOrder')
+  async cancelAnyOrder(
+    @CurrentUser() uid: string,
+    @Args('orderId') orderId: string,
+    @Args('reason') reason: string | null,
+  ): Promise<Order> {
+    return this.orders.cancelAnyOrder({ orderId, byUid: uid, reason });
   }
 
   // ─── Subscription ─────────────────────────────────────────────────────

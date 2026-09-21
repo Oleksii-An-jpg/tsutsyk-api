@@ -1168,6 +1168,129 @@ describe('putting an order together', () => {
   });
 });
 
+describe('calling an order off, as us', () => {
+  async function placed(monobank: FakeMonobank = fakeMonobank()) {
+    const context = setup(monobank);
+    const { order } = await context.orders.placeOrder({
+      input: ONE_TRACKER,
+      uid: 'uid-1',
+    });
+    return { ...context, id: order.id };
+  }
+
+  type Placed = Awaited<ReturnType<typeof placed>>;
+
+  async function markPaid(context: Placed) {
+    await context.orders.applyInvoiceStatus({
+      invoiceId: 'inv_1',
+      status: 'success',
+      amount: 490_000,
+      ccy: 980,
+      reference: context.id,
+      modifiedDate: '2026-09-16T10:00:00Z',
+    });
+  }
+
+  it('calls off an order that is not ours, without owning it', async () => {
+    const context = await placed();
+
+    const order = await context.orders.cancelAnyOrder({
+      orderId: context.id,
+      byUid: 'admin-1',
+      reason: 'Немає з чого збирати',
+    });
+
+    expect(order.status).toBe(OrderStatus.CANCELLED);
+    expect(order.cancelReason).toBe('Немає з чого збирати');
+    expect(order.paymentPageUrl).toBeNull();
+    expect(context.monobank.removeInvoice).toHaveBeenCalledWith('inv_1');
+  });
+
+  it('refunds a paid one through monobank, same as the customer would', async () => {
+    const context = await placed();
+    await markPaid(context);
+
+    const order = await context.orders.cancelAnyOrder({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+
+    expect(context.monobank.cancelInvoice).toHaveBeenCalledWith('inv_1');
+    expect(order.status).toBe(OrderStatus.REFUNDED);
+  });
+
+  it('says in the timeline that we stopped it, not the customer', async () => {
+    const context = await placed();
+
+    await context.orders.cancelAnyOrder({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+
+    const order = await context.orders.getOrder(context.id, 'uid-1');
+    const last = order.events[order.events.length - 1];
+
+    expect(last.actor).toBe(OrderActor.ADMIN);
+    // Which of us pressed the button is stored, and still not the
+    // customer's business — the same bargain dispatch strikes.
+    expect(context.store.get(context.id).events.at(-1)?.byUid).toBe('admin-1');
+    expect(last).not.toHaveProperty('byUid');
+  });
+
+  it('tells whoever is watching the order', async () => {
+    const context = await placed();
+    const publish = jest.spyOn(context.orders.getPubSub(), 'publish');
+
+    await context.orders.cancelAnyOrder({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+
+    const [channel, payload] = publish.mock.calls[
+      publish.mock.calls.length - 1
+    ] as [string, { orderUpdates: OrderTracking }];
+
+    expect(channel).toBe('orderUpdates');
+    expect(payload.orderUpdates.status).toBe(OrderStatus.CANCELLED);
+  });
+
+  it('will not call back a parcel that has gone out', async () => {
+    const context = await placed();
+    await markPaid(context);
+    context.store.set(context.id, {
+      ...context.store.get(context.id),
+      status: OrderStatus.SHIPPED,
+    } as OrderDoc);
+
+    await expect(
+      context.orders.cancelAnyOrder({ orderId: context.id, byUid: 'admin-1' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('leaves the order alone when monobank refuses the refund', async () => {
+    const context = await placed(
+      fakeMonobank({
+        cancelInvoice: jest.fn().mockResolvedValue({ status: 'failure' }),
+      }),
+    );
+    await markPaid(context);
+
+    await expect(
+      context.orders.cancelAnyOrder({ orderId: context.id, byUid: 'admin-1' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(context.store.get(context.id).status).toBe(OrderStatus.PAID);
+  });
+
+  it('has nothing to call off when there is no such order', async () => {
+    const context = await placed();
+
+    await expect(
+      context.orders.cancelAnyOrder({ orderId: 'NOSUCHID', byUid: 'admin-1' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
 describe('following an order without the app', () => {
   async function placedOrder() {
     const context = setup();
