@@ -129,8 +129,9 @@ amount, and it never talks to monobank itself.
 | `markOrderInAssembly(orderId)` | Start packing, which freezes the address |
 | `markOrderShipped(orderId, trackingNumber)` | Record the waybill and send it on its way |
 | `markOrderDelivered(orderId)` | Close out an order that arrived |
+| `cancelAnyOrder(orderId, reason)` | Call off an order we cannot fill — refunded the same way |
 
-All five need the `admin` custom claim, not ownership — see **Dispatch** below.
+All six need the `admin` custom claim, not ownership — see **Dispatch** below.
 Everything in the customer's table answers about the caller's own orders,
 which is no help when the order to be packed belongs to somebody else.
 
@@ -263,6 +264,16 @@ An unpaid order withdraws its invoice (`/invoice/remove`) so an abandoned
 payment page cannot be paid after the fact. A paid one is refunded in full
 (`/invoice/cancel`). monobank answering `processing` rather than `success` is
 not a loss: the order is cancelled and the `reversed` webhook finishes the job.
+
+`cancelOrder` and `cancelAnyOrder` are the same act under the same rules —
+one cancellation, reached either by the customer who owns the order or by us,
+so an order called off from the back office cannot land in a state the
+customer's own path could not produce. The two differ in exactly one thing,
+whether they checked who owns it, and in what the timeline then records:
+`CUSTOMER` or `ADMIN`, so somebody reading their own order afterwards can tell
+which of us stopped it. `cancelAnyOrder` exists because a shop that cannot
+call off an order it cannot fill is not a shop — until it, the only person who
+could refund a customer was the customer.
 
 ### Configuration
 
