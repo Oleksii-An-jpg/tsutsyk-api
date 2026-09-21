@@ -44,6 +44,8 @@ enum OrderActor {
     CUSTOMER
     MONOBANK
     SYSTEM
+    # Us, by hand: dispatching the parcel and closing the order out.
+    ADMIN
 }
 
 # A line of the order, priced when the order was placed so a later price
@@ -100,7 +102,9 @@ type Order {
     # Ids of the units shipped against this order, once they are assigned.
     tsutsykIds: [String!]!
     events: [OrderEvent!]!
-    # Whether the caller may still change the delivery details.
+    # Whether the caller may still change the delivery details. False once
+    # the order goes into assembly — from there the address is being copied
+    # onto a waybill by hand.
     editable: Boolean!
     # Whether the caller may still cancel it.
     cancellable: Boolean!
@@ -188,6 +192,19 @@ extend type Query {
     # For the customer who cannot get into their account but wants to know
     # where the parcel is. Deliberately thin, since anyone may call it.
     getOrderTracking(id: ID!, phone: String!): OrderTracking
+
+    # ─── Ours ─────────────────────────────────────────────────────────────
+    # Admin only. Everything above answers about the caller's own orders,
+    # which is no help when the order to be packed belongs to a customer.
+
+    # Orders across every customer, newest first. `status: PAID` is the list
+    # of parcels waiting to be put together. `limit` defaults to 50 and is
+    # capped at 200.
+    getOrders(status: OrderStatus, limit: Int): [Order!]!
+
+    # One order, whoever it belongs to — the address to copy onto the
+    # waybill. `getOrder` answers only about the caller's own.
+    getAnyOrder(id: ID!): Order
 }
 
 extend type Mutation {
@@ -214,6 +231,27 @@ extend type Mutation {
     # Asks monobank for the invoice's current status and applies it. The one
     # way to observe `expired`, which never sends a webhook.
     refreshOrderPayment(orderId: ID!): Order!
+
+    # ─── Dispatch ─────────────────────────────────────────────────────────
+    # Admin only — the `admin` custom claim, not ownership. These are the two
+    # points where somebody has physically done something to the parcel, and
+    # the only way an order reaches SHIPPED or DELIVERED. The waybill itself
+    # is created by hand in Nova Poshta's own cabinet; this records its number
+    # so the customer can follow it.
+
+    # Takes a paid order off the customer's hands to be put together. The one
+    # thing it changes is that the delivery details stop being editable, so
+    # the address cannot move between being read and being printed onto the
+    # waybill. Cancelling is still allowed.
+    markOrderInAssembly(orderId: ID!): Order!
+
+    # Records the waybill and moves the order to SHIPPED. Also accepted on an
+    # order that has already shipped, which is how a mistyped number is
+    # corrected.
+    markOrderShipped(orderId: ID!, trackingNumber: String!): Order!
+
+    # Closes out an order the customer has collected. SHIPPED orders only.
+    markOrderDelivered(orderId: ID!): Order!
 }
 
 extend type Subscription {

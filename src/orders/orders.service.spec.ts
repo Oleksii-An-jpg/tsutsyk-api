@@ -3,6 +3,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  NotFoundException,
 } from '@nestjs/common';
 import {
   OrdersService,
@@ -16,7 +17,9 @@ import { FirestoreService } from '../firestore/firestore.service';
 import { OrderDoc } from '../firestore/firestore.types';
 import {
   DeliveryMethod,
+  OrderActor,
   OrderStatus,
+  OrderTracking,
   PaymentStatus,
   PlaceOrderInput,
 } from '../graphql.schema';
@@ -77,11 +80,21 @@ class FakeRef {
   }
 }
 
+/** Timestamps compare by their instant; everything else by `<`. */
+function compare(a: unknown, b: unknown): number {
+  if (a instanceof Timestamp && b instanceof Timestamp) {
+    return a.toMillis() - b.toMillis();
+  }
+  if (a === b) return 0;
+  return (a as number) < (b as number) ? -1 : 1;
+}
+
 class FakeQuery {
   constructor(
     private readonly store: Map<string, OrderDoc>,
     private readonly filters: [keyof OrderDoc, string, unknown][] = [],
     private readonly max?: number,
+    private readonly order?: [keyof OrderDoc, 'asc' | 'desc'],
   ) {}
 
   where(field: keyof OrderDoc, op: string, value: unknown) {
@@ -89,15 +102,21 @@ class FakeQuery {
       this.store,
       [...this.filters, [field, op, value]],
       this.max,
+      this.order,
     );
   }
 
-  orderBy() {
-    return this;
+  // Ordering is real rather than a no-op: `listOrders` promises newest
+  // first, and a fake that ignored it would let that promise rot.
+  orderBy(field: keyof OrderDoc, direction: 'asc' | 'desc' = 'asc') {
+    return new FakeQuery(this.store, this.filters, this.max, [
+      field,
+      direction,
+    ]);
   }
 
   limit(max: number) {
-    return new FakeQuery(this.store, this.filters, max);
+    return new FakeQuery(this.store, this.filters, max, this.order);
   }
 
   get() {
@@ -110,6 +129,14 @@ class FakeQuery {
           return true;
         }),
       )
+      .sort(([, left], [, right]) => {
+        if (!this.order) return 0;
+        const [field, direction] = this.order;
+        const sign = direction === 'desc' ? -1 : 1;
+        return sign * compare(left[field], right[field]);
+      })
+      // Firestore applies the limit after ordering, so this must too —
+      // otherwise "the newest 3" would be "any 3, newest first".
       .slice(0, this.max ?? Infinity)
       .map(([id, doc]) => ({
         id,
@@ -133,6 +160,9 @@ function fakeFirestore() {
     doc: (id: string) => new FakeRef(store, id),
     where: (field: keyof OrderDoc, op: string, value: unknown) =>
       new FakeQuery(store).where(field, op, value),
+    orderBy: (field: keyof OrderDoc, direction: 'asc' | 'desc' = 'asc') =>
+      new FakeQuery(store).orderBy(field, direction),
+    limit: (max: number) => new FakeQuery(store).limit(max),
   };
 
   const db = {
@@ -678,6 +708,463 @@ describe('managing an order', () => {
     await expect(
       context.orders.retryOrderPayment({ orderId: context.id, uid: 'uid-1' }),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe('dispatching an order', () => {
+  // A real Nova Poshta waybill number: fourteen digits.
+  const TTN = '20450912345678';
+
+  async function paid(overrides: Partial<OrderDoc> = {}) {
+    const context = setup();
+    const { order } = await context.orders.placeOrder({
+      input: ONE_TRACKER,
+      uid: 'uid-1',
+    });
+
+    context.store.set(order.id, {
+      ...context.store.get(order.id),
+      status: OrderStatus.PAID,
+      paymentStatus: PaymentStatus.SUCCESS,
+      ...overrides,
+    } as OrderDoc);
+
+    return { ...context, id: order.id };
+  }
+
+  it('puts the waybill on the order and sends it on its way', async () => {
+    const context = await paid();
+
+    const order = await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+
+    expect(order.status).toBe(OrderStatus.SHIPPED);
+    expect(order.trackingNumber).toBe(TTN);
+    // A parcel already handed over is no longer the customer's to redirect
+    // or call off — the guards that said so were unreachable until now.
+    expect(order.editable).toBe(false);
+    expect(order.cancellable).toBe(false);
+
+    const last = order.events[order.events.length - 1];
+    expect(last.actor).toBe(OrderActor.ADMIN);
+    expect(last.status).toBe(OrderStatus.SHIPPED);
+  });
+
+  it('tells whoever is watching the order', async () => {
+    const context = await paid();
+    const publish = jest.spyOn(context.orders.getPubSub(), 'publish');
+
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+
+    const [channel, payload] = publish.mock.calls[
+      publish.mock.calls.length - 1
+    ] as [string, { orderUpdates: OrderTracking }];
+
+    expect(channel).toBe('orderUpdates');
+    expect(payload.orderUpdates.id).toBe(context.id);
+    expect(payload.orderUpdates.status).toBe(OrderStatus.SHIPPED);
+    expect(payload.orderUpdates.trackingNumber).toBe(TTN);
+  });
+
+  it("keeps which of us pressed the button out of the customer's timeline", async () => {
+    const context = await paid();
+
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+
+    // Recorded on the document...
+    const stored = context.store.get(context.id);
+    expect(stored.events[stored.events.length - 1].byUid).toBe('admin-1');
+
+    // ...and not on what the customer reads.
+    const order = await context.orders.getOrder(context.id, 'uid-1');
+    for (const entry of order.events) {
+      expect(entry).not.toHaveProperty('byUid');
+    }
+  });
+
+  it('reads a waybill number copied with the spaces in', async () => {
+    const context = await paid();
+
+    const order = await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: ' 2045 0912 3456 78 ',
+      byUid: 'admin-1',
+    });
+
+    expect(order.trackingNumber).toBe(TTN);
+  });
+
+  it('refuses a Nova Poshta number that is not fourteen digits', async () => {
+    const context = await paid();
+
+    for (const bad of [
+      '',
+      '2045091234567',
+      '204509123456789',
+      'RA123456789UA',
+    ]) {
+      await expect(
+        context.orders.markOrderShipped({
+          orderId: context.id,
+          trackingNumber: bad,
+          byUid: 'admin-1',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    }
+  });
+
+  it('takes another carrier at its word', async () => {
+    const context = await paid({
+      delivery: {
+        ...DELIVERY,
+        method: DeliveryMethod.UKRPOSHTA,
+        address: null,
+        comment: null,
+      },
+    });
+
+    const order = await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: 'RA123456789UA',
+      byUid: 'admin-1',
+    });
+
+    expect(order.trackingNumber).toBe('RA123456789UA');
+  });
+
+  it('will not ship something nobody has paid for', async () => {
+    const context = setup();
+    const { order } = await context.orders.placeOrder({
+      input: ONE_TRACKER,
+      uid: 'uid-1',
+    });
+
+    await expect(
+      context.orders.markOrderShipped({
+        orderId: order.id,
+        trackingNumber: TTN,
+        byUid: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('will not ship something already called off', async () => {
+    const context = await paid({ status: OrderStatus.CANCELLED });
+
+    await expect(
+      context.orders.markOrderShipped({
+        orderId: context.id,
+        trackingNumber: TTN,
+        byUid: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('corrects a mistyped number without dispatching twice', async () => {
+    const context = await paid();
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+    const afterFirst = context.store.get(context.id).events.length;
+
+    const corrected = await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: '20450912345679',
+      byUid: 'admin-1',
+    });
+
+    expect(corrected.trackingNumber).toBe('20450912345679');
+    expect(corrected.status).toBe(OrderStatus.SHIPPED);
+    expect(context.store.get(context.id).events.length).toBe(afterFirst + 1);
+  });
+
+  it('says nothing twice when the same number is sent again', async () => {
+    const context = await paid();
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+    const events = context.store.get(context.id).events.length;
+
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: ' 2045-0912-3456-78 ',
+      byUid: 'admin-1',
+    });
+
+    expect(context.store.get(context.id).events.length).toBe(events);
+  });
+
+  it('closes out an order that arrived, and only one that went out', async () => {
+    const context = await paid();
+
+    await expect(
+      context.orders.markOrderDelivered({
+        orderId: context.id,
+        byUid: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+
+    const delivered = await context.orders.markOrderDelivered({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+    expect(delivered.status).toBe(OrderStatus.DELIVERED);
+
+    // Asking twice is the same answer, not an error to explain.
+    const again = await context.orders.markOrderDelivered({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+    expect(again.status).toBe(OrderStatus.DELIVERED);
+  });
+
+  it('finds the order however the number was typed, or says it has none', async () => {
+    const context = await paid();
+
+    const order = await context.orders.markOrderShipped({
+      orderId: ` ${context.id.toLowerCase()} `,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+    expect(order.id).toBe(context.id);
+
+    await expect(
+      context.orders.markOrderDelivered({
+        orderId: 'NOSUCHID',
+        byUid: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('working through the orders, as us', () => {
+  async function ordersInStates(states: OrderStatus[]) {
+    const context = setup();
+    const ids: string[] = [];
+
+    for (const [index, status] of states.entries()) {
+      const { order } = await context.orders.placeOrder({
+        input: ONE_TRACKER,
+        uid: `uid-${index}`,
+      });
+      context.store.set(order.id, {
+        ...context.store.get(order.id),
+        status,
+        // Placed a minute apart, oldest first, so "newest first" is a claim
+        // the assertions can actually catch being wrong.
+        createdAt: Timestamp.fromDate(new Date(2026, 0, 1, 0, index)),
+      } as OrderDoc);
+      ids.push(order.id);
+    }
+
+    return { ...context, ids };
+  }
+
+  it('lists what is waiting to be packed, whoever it belongs to', async () => {
+    const context = await ordersInStates([
+      OrderStatus.PAID,
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.PAID,
+      OrderStatus.SHIPPED,
+    ]);
+
+    const paid = await context.orders.listOrders({ status: OrderStatus.PAID });
+
+    expect(paid.map((order) => order.id).sort()).toEqual(
+      [context.ids[0], context.ids[2]].sort(),
+    );
+    // Every one of them belongs to somebody else.
+    expect(paid.every((order) => order.delivery !== null)).toBe(true);
+  });
+
+  it('answers newest first, and everything when no status is given', async () => {
+    const context = await ordersInStates([
+      OrderStatus.PAID,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+    ]);
+
+    const all = await context.orders.listOrders();
+
+    expect(all).toHaveLength(3);
+    expect(all.map((order) => order.id)).toEqual([...context.ids].reverse());
+  });
+
+  it('never reads more than it was asked for, or more than the cap', async () => {
+    const context = await ordersInStates([
+      OrderStatus.PAID,
+      OrderStatus.PAID,
+      OrderStatus.PAID,
+    ]);
+
+    expect(await context.orders.listOrders({ limit: 2 })).toHaveLength(2);
+
+    // Nonsense bounds land inside the allowed range rather than throwing:
+    // this is our own console, and an empty page helps nobody.
+    expect(await context.orders.listOrders({ limit: 0 })).toHaveLength(1);
+    expect(await context.orders.listOrders({ limit: -5 })).toHaveLength(1);
+    expect(await context.orders.listOrders({ limit: 10_000 })).toHaveLength(3);
+    expect(await context.orders.listOrders({ limit: NaN })).toHaveLength(3);
+  });
+
+  it('hands over the address to copy onto the waybill', async () => {
+    const context = await ordersInStates([OrderStatus.PAID]);
+
+    const order = await context.orders.getAnyOrder(
+      ` ${context.ids[0].toLowerCase()} `,
+    );
+
+    expect(order?.delivery?.city).toBe('Львів');
+    expect(order?.delivery?.branch).toBe('12');
+    expect(order?.delivery?.recipientName).toBe('Олекса Цуцик');
+
+    expect(await context.orders.getAnyOrder('NOSUCHID')).toBeNull();
+  });
+
+  it("is still the customer who cannot read somebody else's order", async () => {
+    const context = await ordersInStates([OrderStatus.PAID]);
+
+    await expect(
+      context.orders.getOrder(context.ids[0], 'somebody-else'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe('putting an order together', () => {
+  async function paidOrder() {
+    const context = setup();
+    const { order } = await context.orders.placeOrder({
+      input: ONE_TRACKER,
+      uid: 'uid-1',
+    });
+    context.store.set(order.id, {
+      ...context.store.get(order.id),
+      status: OrderStatus.PAID,
+      paymentStatus: PaymentStatus.SUCCESS,
+    } as OrderDoc);
+    return { ...context, id: order.id };
+  }
+
+  it('freezes the address once somebody starts packing', async () => {
+    const context = await paidOrder();
+
+    const before = await context.orders.getOrder(context.id, 'uid-1');
+    expect(before?.editable).toBe(true);
+
+    const packing = await context.orders.markOrderInAssembly({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+
+    expect(packing.status).toBe(OrderStatus.IN_ASSEMBLY);
+    expect(packing.editable).toBe(false);
+
+    await expect(
+      context.orders.updateOrderDelivery({
+        orderId: context.id,
+        uid: 'uid-1',
+        input: { ...DELIVERY, branch: '99' },
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('does not tell the customer it shipped when it is still on the table', async () => {
+    const context = await paidOrder();
+    await context.orders.markOrderInAssembly({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+
+    await expect(
+      context.orders.updateOrderContact({
+        orderId: context.id,
+        uid: 'uid-1',
+        input: { phone: '+380671234500' },
+      }),
+    ).rejects.toThrow(/being put together/);
+  });
+
+  it('still lets a parcel that has gone nowhere be called off', async () => {
+    const context = await paidOrder();
+    const packing = await context.orders.markOrderInAssembly({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+
+    expect(packing.cancellable).toBe(true);
+
+    const cancelled = await context.orders.cancelOrder({
+      orderId: context.id,
+      uid: 'uid-1',
+    });
+    expect(cancelled.status).toBe(OrderStatus.REFUNDED);
+  });
+
+  it('will not start on something unpaid, and shrugs at being asked twice', async () => {
+    const context = setup();
+    const { order } = await context.orders.placeOrder({
+      input: ONE_TRACKER,
+      uid: 'uid-1',
+    });
+
+    await expect(
+      context.orders.markOrderInAssembly({
+        orderId: order.id,
+        byUid: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    context.store.set(order.id, {
+      ...context.store.get(order.id),
+      status: OrderStatus.IN_ASSEMBLY,
+    } as OrderDoc);
+
+    const events = context.store.get(order.id).events.length;
+    const again = await context.orders.markOrderInAssembly({
+      orderId: order.id,
+      byUid: 'admin-1',
+    });
+
+    expect(again.status).toBe(OrderStatus.IN_ASSEMBLY);
+    expect(context.store.get(order.id).events.length).toBe(events);
+  });
+
+  it('ships straight from assembly', async () => {
+    const context = await paidOrder();
+    await context.orders.markOrderInAssembly({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+
+    const shipped = await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: '20450912345678',
+      byUid: 'admin-1',
+    });
+
+    expect(shipped.status).toBe(OrderStatus.SHIPPED);
+    expect(shipped.cancellable).toBe(false);
   });
 });
 

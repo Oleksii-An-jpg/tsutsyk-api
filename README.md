@@ -120,6 +120,20 @@ amount, and it never talks to monobank itself.
 | `cancelOrder` | Call it off — refunded through monobank if it was paid |
 | `orderUpdates(orderId)` | Live status over the websocket |
 
+### What we can do
+
+| Operation | What it is for |
+| --- | --- |
+| `getOrders(status, limit)` | What needs packing — `status: PAID` is the queue |
+| `getAnyOrder(id)` | One order in full, including the address for the waybill |
+| `markOrderInAssembly(orderId)` | Start packing, which freezes the address |
+| `markOrderShipped(orderId, trackingNumber)` | Record the waybill and send it on its way |
+| `markOrderDelivered(orderId)` | Close out an order that arrived |
+
+All five need the `admin` custom claim, not ownership — see **Dispatch** below.
+Everything in the customer's table answers about the caller's own orders,
+which is no help when the order to be packed belongs to somebody else.
+
 ### No guest checkout, and no order without an address
 
 `placeOrder` requires a Firebase ID token and a `delivery` block. Both are
@@ -167,6 +181,81 @@ Two things monobank's own docs force:
 Redeliveries are idempotent: the same status writes nothing new, and
 fulfilment is guarded on the order actually advancing, so a retry cannot fire
 a confirmation twice.
+
+### Dispatch
+
+The waybill is created by hand in Nova Poshta's own cabinet. The API does not
+call Nova Poshta at all — the storefront does, but only to read the address
+directory so the buyer picks a branch that exists rather than typing one from
+memory, and what reaches us is still `city` and `branch` as plain text.
+
+The day's work goes: `getOrders(status: PAID)` for the queue, `getAnyOrder(id)`
+for the address to copy, `markOrderInAssembly` to freeze it while the waybill
+is filled in, then `markOrderShipped` with the number off that waybill, and
+`markOrderDelivered` when it arrives. Those are the only ways an order reaches
+`IN_ASSEMBLY`, `SHIPPED` or `DELIVERED`, and between them they make three
+things that were already written actually happen: the storefront has always
+asked for `trackingNumber` and always watched `orderUpdates`, so the number
+appears on a page somebody may be looking at without a reload; and the
+editability guards on `updateOrderDelivery`, `updateOrderContact` and
+`cancelOrder` stop being unreachable — a parcel being packed is no longer the
+customer's to redirect.
+
+#### Freezing the address
+
+`editable` now stops one step earlier than `cancellable`. Up to `PAID` the
+customer may correct where the parcel goes; from `IN_ASSEMBLY` they may not,
+because the waybill is being filled in by hand from what the order says and an
+address that moves between being read and being printed is a parcel going
+somewhere nobody will look for it. Cancelling stays open through assembly — a
+parcel that has gone nowhere can be unpacked — and closes at `SHIPPED`.
+
+The storefront needs nothing for this: `delivery-form.tsx` already disables
+itself on `!order.editable`. The refusal now says which of the two it is,
+rather than telling somebody whose parcel is still on the table that it
+shipped.
+
+A few more deliberate edges:
+
+- **Not from `PENDING_PAYMENT`.** Handing over a parcel nobody paid for is a
+  mistake worth refusing rather than recording.
+- **Nova Poshta numbers are checked to be fourteen digits**, because the
+  number is typed off a printed sheet and a wrong one is silent — the customer
+  follows somebody else's parcel, and we hear about it when theirs does not
+  arrive. Other carriers are taken at their word. Spaces and dashes are
+  stripped, so `2045 0912 3456 78` and `20450912345678` are one number.
+- **Re-running it on a shipped order corrects the number.** A typo is noticed
+  after the fact or not at all. The status does not move twice, the timeline
+  says a correction, and re-sending the same number writes nothing.
+- **`markOrderDelivered` is idempotent** and only accepts a `SHIPPED` order:
+  nothing polls Nova Poshta, so this is somebody noticing, and an order that
+  never went out cannot have arrived.
+
+#### Who counts as us
+
+Every other mutation is authorised by ownership: the caller may touch an order
+because it is theirs. Dispatch is the first thing that is nobody's order in
+particular, so it is guarded by the `admin` custom claim on the Firebase token
+instead, checked by `AdminGuard` — which extends `FirebaseAuthGuard`, so one
+decorator both verifies the token and checks the claim rather than leaving a
+mutation half-guarded.
+
+The claim is granted out of band:
+
+```bash
+npm run grant:admin -- --email=you@example.com
+npm run grant:admin -- --email=you@example.com --revoke
+```
+
+Nothing the API exposes can set it, so neither a compromised storefront nor a
+stolen customer token can escalate into an admin — it takes the service
+account. The claim lands in the next ID token that is minted, so an
+already-signed-in browser keeps its old one for up to an hour unless it calls
+`getIdToken(true)`.
+
+Who dispatched an order is recorded on the timeline entry as `byUid` and
+logged, but never exposed: `Order.events` is read by the customer, and which
+of us pressed the button is not theirs to know. The actor reads `ADMIN`.
 
 ### Cancelling
 
@@ -404,9 +493,21 @@ are worth keeping somewhere durable.
   anchor point on the tracker (the owner's phone is not something the API can
   see), and that is a product decision — a yard the dog leaves, or a distance
   from a person — not just a port.
-- **Nothing pushes about orders yet.** The monobank webhook is the obvious
-  place to announce a payment confirming or an order shipping, and it already
-  runs server-side; it is just not wired to this.
+- **Nothing tells the customer their parcel went out.** There is no email
+  anywhere in the API and no order push, so the waybill number appears on the
+  order page and waits to be looked at — `orderUpdates` only helps somebody
+  with the tab already open. The monobank webhook and `markOrderShipped` are
+  the two obvious places to announce a payment confirming and a parcel going
+  out, and both already run server-side; they are just not wired to this.
+  `OrdersModule` would need `NotificationsModule`, which it does not import
+  today.
+- **Nothing tells us an order was paid either.** `getOrders(status: PAID)` has
+  to be looked at — there is no notification when the queue grows.
+- **Nothing asks Nova Poshta where the parcel is.** `markOrderDelivered` is
+  somebody noticing and saying so. `TrackingDocument.getStatusByPhone` would
+  close the loop, and would want the settlement and warehouse refs the
+  storefront's branch picker currently drops — `DeliveryInput` has nowhere to
+  put them.
 
 ## Resources
 
