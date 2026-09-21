@@ -124,10 +124,15 @@ amount, and it never talks to monobank itself.
 
 | Operation | What it is for |
 | --- | --- |
+| `getOrders(status, limit)` | What needs packing — `status: PAID` is the queue |
+| `getAnyOrder(id)` | One order in full, including the address for the waybill |
+| `markOrderInAssembly(orderId)` | Start packing, which freezes the address |
 | `markOrderShipped(orderId, trackingNumber)` | Record the waybill and send it on its way |
 | `markOrderDelivered(orderId)` | Close out an order that arrived |
 
-Both need the `admin` custom claim, not ownership — see **Dispatch** below.
+All five need the `admin` custom claim, not ownership — see **Dispatch** below.
+Everything in the customer's table answers about the caller's own orders,
+which is no help when the order to be packed belongs to somebody else.
 
 ### No guest checkout, and no order without an address
 
@@ -184,16 +189,33 @@ call Nova Poshta at all — the storefront does, but only to read the address
 directory so the buyer picks a branch that exists rather than typing one from
 memory, and what reaches us is still `city` and `branch` as plain text.
 
-`markOrderShipped` records the number off that waybill and moves the order to
-`SHIPPED`; `markOrderDelivered` closes it out. They are the only way an order
-reaches either status, and between them they make three things that were
-already written actually happen: the storefront has always asked for
-`trackingNumber` and always watched `orderUpdates`, so the number appears on a
-page somebody may be looking at without a reload; and the "already shipped"
-guards on `updateOrderDelivery`, `updateOrderContact` and `cancelOrder` stop
-being unreachable — a parcel in a van is no longer the customer's to redirect.
+The day's work goes: `getOrders(status: PAID)` for the queue, `getAnyOrder(id)`
+for the address to copy, `markOrderInAssembly` to freeze it while the waybill
+is filled in, then `markOrderShipped` with the number off that waybill, and
+`markOrderDelivered` when it arrives. Those are the only ways an order reaches
+`IN_ASSEMBLY`, `SHIPPED` or `DELIVERED`, and between them they make three
+things that were already written actually happen: the storefront has always
+asked for `trackingNumber` and always watched `orderUpdates`, so the number
+appears on a page somebody may be looking at without a reload; and the
+editability guards on `updateOrderDelivery`, `updateOrderContact` and
+`cancelOrder` stop being unreachable — a parcel being packed is no longer the
+customer's to redirect.
 
-A few deliberate edges:
+#### Freezing the address
+
+`editable` now stops one step earlier than `cancellable`. Up to `PAID` the
+customer may correct where the parcel goes; from `IN_ASSEMBLY` they may not,
+because the waybill is being filled in by hand from what the order says and an
+address that moves between being read and being printed is a parcel going
+somewhere nobody will look for it. Cancelling stays open through assembly — a
+parcel that has gone nowhere can be unpacked — and closes at `SHIPPED`.
+
+The storefront needs nothing for this: `delivery-form.tsx` already disables
+itself on `!order.editable`. The refusal now says which of the two it is,
+rather than telling somebody whose parcel is still on the table that it
+shipped.
+
+A few more deliberate edges:
 
 - **Not from `PENDING_PAYMENT`.** Handing over a parcel nobody paid for is a
   mistake worth refusing rather than recording.
@@ -208,10 +230,6 @@ A few deliberate edges:
 - **`markOrderDelivered` is idempotent** and only accepts a `SHIPPED` order:
   nothing polls Nova Poshta, so this is somebody noticing, and an order that
   never went out cannot have arrived.
-
-`IN_ASSEMBLY` is still unreachable — an order goes from `PAID` straight to
-`SHIPPED`. There is nothing between the two worth recording while the parcels
-are put together by hand.
 
 #### Who counts as us
 
@@ -475,11 +493,16 @@ are worth keeping somewhere durable.
   anchor point on the tracker (the owner's phone is not something the API can
   see), and that is a product decision — a yard the dog leaves, or a distance
   from a person — not just a port.
-- **Nothing pushes about orders yet.** The monobank webhook and
-  `markOrderShipped` are the two obvious places to announce a payment
-  confirming and a parcel going out, and both already run server-side; they
-  are just not wired to this. `OrdersModule` would need `NotificationsModule`,
-  which it does not import today.
+- **Nothing tells the customer their parcel went out.** There is no email
+  anywhere in the API and no order push, so the waybill number appears on the
+  order page and waits to be looked at — `orderUpdates` only helps somebody
+  with the tab already open. The monobank webhook and `markOrderShipped` are
+  the two obvious places to announce a payment confirming and a parcel going
+  out, and both already run server-side; they are just not wired to this.
+  `OrdersModule` would need `NotificationsModule`, which it does not import
+  today.
+- **Nothing tells us an order was paid either.** `getOrders(status: PAID)` has
+  to be looked at — there is no notification when the queue grows.
 - **Nothing asks Nova Poshta where the parcel is.** `markOrderDelivered` is
   somebody noticing and saying so. `TrackingDocument.getStatusByPhone` would
   close the loop, and would want the settlement and warehouse refs the

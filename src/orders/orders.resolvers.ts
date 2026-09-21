@@ -18,6 +18,7 @@ import {
   Order,
   OrderContactInput,
   OrderPayment,
+  OrderStatus,
   OrderTracking,
   PlaceOrderInput,
   Product,
@@ -77,6 +78,23 @@ export class OrdersResolvers {
     @Args('phone') phone: string,
   ): Promise<OrderTracking> {
     return this.orders.getOrderTracking(id, phone);
+  }
+
+  // ─── Queries, as us ───────────────────────────────────────────────────
+
+  @UseGuards(AdminGuard)
+  @Query('getOrders')
+  async getOrders(
+    @Args('status') status: OrderStatus | null,
+    @Args('limit') limit: number | null,
+  ): Promise<Order[]> {
+    return this.orders.listOrders({ status, limit });
+  }
+
+  @UseGuards(AdminGuard)
+  @Query('getAnyOrder')
+  async getAnyOrder(@Args('id') id: string): Promise<Order> {
+    return this.orders.getAnyOrder(id);
   }
 
   // ─── Mutations ────────────────────────────────────────────────────────
@@ -158,6 +176,15 @@ export class OrdersResolvers {
   // the customer's, and it is the one thing in the schema not authorised by
   // owning the thing being changed. The uid is passed on only to be recorded
   // — the guard has already decided the question.
+
+  @UseGuards(AdminGuard)
+  @Mutation('markOrderInAssembly')
+  async markOrderInAssembly(
+    @CurrentUser() uid: string,
+    @Args('orderId') orderId: string,
+  ): Promise<Order> {
+    return this.orders.markOrderInAssembly({ orderId, byUid: uid });
+  }
 
   @UseGuards(AdminGuard)
   @Mutation('markOrderShipped')
