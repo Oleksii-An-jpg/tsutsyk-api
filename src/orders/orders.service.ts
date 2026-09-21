@@ -539,11 +539,7 @@ export class OrdersService {
   }
 
   /**
-   * Calls the order off.
-   *
-   * An unpaid invoice is withdrawn so it cannot be paid afterwards; money
-   * that did arrive is sent back through monobank. A refund monobank answers
-   * `processing` for is not lost — the `reversed` webhook finishes the job.
+   * Calls the order off, at the customer's own asking.
    */
   async cancelOrder({
     orderId,
@@ -556,12 +552,75 @@ export class OrdersService {
   }): Promise<GqlOrder> {
     const { id, data } = await this.loadOwned(orderId, uid);
 
+    return this.callOff({ id, data, reason, actor: OrderActor.CUSTOMER });
+  }
+
+  /**
+   * Calls off somebody else's order, because we cannot fill it.
+   *
+   * The same refund, withdrawal and status rules as the customer's own
+   * cancellation — it is the same act, and an order called off from the back
+   * office must not end up in a state the customer's own path cannot produce.
+   * What differs is who is recorded: the timeline says `ADMIN`, so a customer
+   * reading it afterwards can tell that we stopped it rather than them.
+   *
+   * Authorised by the `admin` claim rather than ownership, so it loads the
+   * order without an owner check. Admin only — `AdminGuard`.
+   */
+  async cancelAnyOrder({
+    orderId,
+    byUid,
+    reason,
+  }: {
+    orderId: string;
+    byUid: string;
+    reason?: string | null;
+  }): Promise<GqlOrder> {
+    const { id, data } = await this.load(orderId);
+
+    this.logger.log(`cancelling order ${id} on our side (by ${byUid})`);
+
+    return this.callOff({
+      id,
+      data,
+      reason,
+      actor: OrderActor.ADMIN,
+      byUid,
+    });
+  }
+
+  /**
+   * The cancellation itself, whoever asked for it.
+   *
+   * An unpaid invoice is withdrawn so it cannot be paid afterwards; money
+   * that did arrive is sent back through monobank. A refund monobank answers
+   * `processing` for is not lost — the `reversed` webhook finishes the job.
+   *
+   * Takes the order already loaded, because the two callers above differ in
+   * exactly one thing — whether they checked who owns it — and that check is
+   * the part that must not be shared.
+   */
+  private async callOff({
+    id,
+    data,
+    reason,
+    actor,
+    byUid,
+  }: {
+    id: string;
+    data: OrderDoc;
+    reason?: string | null;
+    actor: OrderActor;
+    byUid?: string;
+  }): Promise<GqlOrder> {
     if (!isCancellable(data.status)) {
       throw new ConflictException(
         data.status === OrderStatus.CANCELLED ||
           data.status === OrderStatus.REFUNDED
           ? 'This order is already cancelled'
-          : 'This order has already shipped — get in touch and we will sort it out',
+          : actor === OrderActor.ADMIN
+            ? `An order that is ${data.status} cannot be cancelled — the parcel has gone out`
+            : 'This order has already shipped — get in touch and we will sort it out',
       );
     }
 
@@ -608,7 +667,7 @@ export class OrdersService {
         paymentPageUrl: null,
         ...(refunded ? { paymentStatus: PaymentStatus.REVERSED } : {}),
         updatedAt: now,
-        events: [...data.events, event(status, OrderActor.CUSTOMER, note)],
+        events: [...data.events, event(status, actor, note, byUid)],
       },
       { merge: true },
     );
