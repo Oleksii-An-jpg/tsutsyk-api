@@ -7,6 +7,7 @@ import {
   Subscription,
 } from '@nestjs/graphql';
 import { UseGuards } from '@nestjs/common';
+import { AdminGuard } from '../auth/admin.guard';
 import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
 import {
   CurrentUser,
@@ -150,6 +151,35 @@ export class OrdersResolvers {
     @Args('orderId') orderId: string,
   ): Promise<Order> {
     return this.orders.refreshOrderPayment(orderId, uid);
+  }
+
+  // ─── Dispatch ─────────────────────────────────────────────────────────
+  // `AdminGuard` rather than `FirebaseAuthGuard`: these are ours to call, not
+  // the customer's, and it is the one thing in the schema not authorised by
+  // owning the thing being changed. The uid is passed on only to be recorded
+  // — the guard has already decided the question.
+
+  @UseGuards(AdminGuard)
+  @Mutation('markOrderShipped')
+  async markOrderShipped(
+    @CurrentUser() uid: string,
+    @Args('orderId') orderId: string,
+    @Args('trackingNumber') trackingNumber: string,
+  ): Promise<Order> {
+    return this.orders.markOrderShipped({
+      orderId,
+      trackingNumber,
+      byUid: uid,
+    });
+  }
+
+  @UseGuards(AdminGuard)
+  @Mutation('markOrderDelivered')
+  async markOrderDelivered(
+    @CurrentUser() uid: string,
+    @Args('orderId') orderId: string,
+  ): Promise<Order> {
+    return this.orders.markOrderDelivered({ orderId, byUid: uid });
   }
 
   // ─── Subscription ─────────────────────────────────────────────────────

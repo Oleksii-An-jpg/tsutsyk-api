@@ -44,6 +44,8 @@ enum OrderActor {
     CUSTOMER
     MONOBANK
     SYSTEM
+    # Us, by hand: dispatching the parcel and closing the order out.
+    ADMIN
 }
 
 # A line of the order, priced when the order was placed so a later price
@@ -214,6 +216,21 @@ extend type Mutation {
     # Asks monobank for the invoice's current status and applies it. The one
     # way to observe `expired`, which never sends a webhook.
     refreshOrderPayment(orderId: ID!): Order!
+
+    # ─── Dispatch ─────────────────────────────────────────────────────────
+    # Admin only — the `admin` custom claim, not ownership. These are the two
+    # points where somebody has physically done something to the parcel, and
+    # the only way an order reaches SHIPPED or DELIVERED. The waybill itself
+    # is created by hand in Nova Poshta's own cabinet; this records its number
+    # so the customer can follow it.
+
+    # Records the waybill and moves the order to SHIPPED. Also accepted on an
+    # order that has already shipped, which is how a mistyped number is
+    # corrected.
+    markOrderShipped(orderId: ID!, trackingNumber: String!): Order!
+
+    # Closes out an order the customer has collected. SHIPPED orders only.
+    markOrderDelivered(orderId: ID!): Order!
 }
 
 extend type Subscription {

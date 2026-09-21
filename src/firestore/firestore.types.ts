@@ -72,6 +72,14 @@ export interface OrderEventDoc {
   status: OrderStatus;
   actor: OrderActor;
   note: string | null;
+  /**
+   * Which admin did this, for the entries we caused by hand.
+   *
+   * Stored but never exposed: `Order.events` is read by the customer, and who
+   * on our side pressed the button is our business, not theirs. Absent on
+   * everything a customer or monobank caused — the actor already says so.
+   */
+  byUid?: string | null;
 }
 
 export interface OrderDoc {

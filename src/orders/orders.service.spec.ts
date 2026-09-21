@@ -3,6 +3,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  NotFoundException,
 } from '@nestjs/common';
 import {
   OrdersService,
@@ -16,7 +17,9 @@ import { FirestoreService } from '../firestore/firestore.service';
 import { OrderDoc } from '../firestore/firestore.types';
 import {
   DeliveryMethod,
+  OrderActor,
   OrderStatus,
+  OrderTracking,
   PaymentStatus,
   PlaceOrderInput,
 } from '../graphql.schema';
@@ -678,6 +681,253 @@ describe('managing an order', () => {
     await expect(
       context.orders.retryOrderPayment({ orderId: context.id, uid: 'uid-1' }),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe('dispatching an order', () => {
+  // A real Nova Poshta waybill number: fourteen digits.
+  const TTN = '20450912345678';
+
+  async function paid(overrides: Partial<OrderDoc> = {}) {
+    const context = setup();
+    const { order } = await context.orders.placeOrder({
+      input: ONE_TRACKER,
+      uid: 'uid-1',
+    });
+
+    context.store.set(order.id, {
+      ...context.store.get(order.id),
+      status: OrderStatus.PAID,
+      paymentStatus: PaymentStatus.SUCCESS,
+      ...overrides,
+    } as OrderDoc);
+
+    return { ...context, id: order.id };
+  }
+
+  it('puts the waybill on the order and sends it on its way', async () => {
+    const context = await paid();
+
+    const order = await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+
+    expect(order.status).toBe(OrderStatus.SHIPPED);
+    expect(order.trackingNumber).toBe(TTN);
+    // A parcel already handed over is no longer the customer's to redirect
+    // or call off — the guards that said so were unreachable until now.
+    expect(order.editable).toBe(false);
+    expect(order.cancellable).toBe(false);
+
+    const last = order.events[order.events.length - 1];
+    expect(last.actor).toBe(OrderActor.ADMIN);
+    expect(last.status).toBe(OrderStatus.SHIPPED);
+  });
+
+  it('tells whoever is watching the order', async () => {
+    const context = await paid();
+    const publish = jest.spyOn(context.orders.getPubSub(), 'publish');
+
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+
+    const [channel, payload] = publish.mock.calls[
+      publish.mock.calls.length - 1
+    ] as [string, { orderUpdates: OrderTracking }];
+
+    expect(channel).toBe('orderUpdates');
+    expect(payload.orderUpdates.id).toBe(context.id);
+    expect(payload.orderUpdates.status).toBe(OrderStatus.SHIPPED);
+    expect(payload.orderUpdates.trackingNumber).toBe(TTN);
+  });
+
+  it("keeps which of us pressed the button out of the customer's timeline", async () => {
+    const context = await paid();
+
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+
+    // Recorded on the document...
+    const stored = context.store.get(context.id);
+    expect(stored.events[stored.events.length - 1].byUid).toBe('admin-1');
+
+    // ...and not on what the customer reads.
+    const order = await context.orders.getOrder(context.id, 'uid-1');
+    for (const entry of order.events) {
+      expect(entry).not.toHaveProperty('byUid');
+    }
+  });
+
+  it('reads a waybill number copied with the spaces in', async () => {
+    const context = await paid();
+
+    const order = await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: ' 2045 0912 3456 78 ',
+      byUid: 'admin-1',
+    });
+
+    expect(order.trackingNumber).toBe(TTN);
+  });
+
+  it('refuses a Nova Poshta number that is not fourteen digits', async () => {
+    const context = await paid();
+
+    for (const bad of [
+      '',
+      '2045091234567',
+      '204509123456789',
+      'RA123456789UA',
+    ]) {
+      await expect(
+        context.orders.markOrderShipped({
+          orderId: context.id,
+          trackingNumber: bad,
+          byUid: 'admin-1',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    }
+  });
+
+  it('takes another carrier at its word', async () => {
+    const context = await paid({
+      delivery: {
+        ...DELIVERY,
+        method: DeliveryMethod.UKRPOSHTA,
+        address: null,
+        comment: null,
+      },
+    });
+
+    const order = await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: 'RA123456789UA',
+      byUid: 'admin-1',
+    });
+
+    expect(order.trackingNumber).toBe('RA123456789UA');
+  });
+
+  it('will not ship something nobody has paid for', async () => {
+    const context = setup();
+    const { order } = await context.orders.placeOrder({
+      input: ONE_TRACKER,
+      uid: 'uid-1',
+    });
+
+    await expect(
+      context.orders.markOrderShipped({
+        orderId: order.id,
+        trackingNumber: TTN,
+        byUid: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('will not ship something already called off', async () => {
+    const context = await paid({ status: OrderStatus.CANCELLED });
+
+    await expect(
+      context.orders.markOrderShipped({
+        orderId: context.id,
+        trackingNumber: TTN,
+        byUid: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('corrects a mistyped number without dispatching twice', async () => {
+    const context = await paid();
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+    const afterFirst = context.store.get(context.id).events.length;
+
+    const corrected = await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: '20450912345679',
+      byUid: 'admin-1',
+    });
+
+    expect(corrected.trackingNumber).toBe('20450912345679');
+    expect(corrected.status).toBe(OrderStatus.SHIPPED);
+    expect(context.store.get(context.id).events.length).toBe(afterFirst + 1);
+  });
+
+  it('says nothing twice when the same number is sent again', async () => {
+    const context = await paid();
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+    const events = context.store.get(context.id).events.length;
+
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: ' 2045-0912-3456-78 ',
+      byUid: 'admin-1',
+    });
+
+    expect(context.store.get(context.id).events.length).toBe(events);
+  });
+
+  it('closes out an order that arrived, and only one that went out', async () => {
+    const context = await paid();
+
+    await expect(
+      context.orders.markOrderDelivered({
+        orderId: context.id,
+        byUid: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    await context.orders.markOrderShipped({
+      orderId: context.id,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+
+    const delivered = await context.orders.markOrderDelivered({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+    expect(delivered.status).toBe(OrderStatus.DELIVERED);
+
+    // Asking twice is the same answer, not an error to explain.
+    const again = await context.orders.markOrderDelivered({
+      orderId: context.id,
+      byUid: 'admin-1',
+    });
+    expect(again.status).toBe(OrderStatus.DELIVERED);
+  });
+
+  it('finds the order however the number was typed, or says it has none', async () => {
+    const context = await paid();
+
+    const order = await context.orders.markOrderShipped({
+      orderId: ` ${context.id.toLowerCase()} `,
+      trackingNumber: TTN,
+      byUid: 'admin-1',
+    });
+    expect(order.id).toBe(context.id);
+
+    await expect(
+      context.orders.markOrderDelivered({
+        orderId: 'NOSUCHID',
+        byUid: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 

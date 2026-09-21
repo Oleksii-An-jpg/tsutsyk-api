@@ -56,6 +56,33 @@ const OPEN_STATUSES: OrderStatus[] = [
   OrderStatus.IN_ASSEMBLY,
 ];
 
+/**
+ * The statuses a parcel can be dispatched from.
+ *
+ * `SHIPPED` is in the list on purpose: re-running the dispatch is how a
+ * mistyped waybill number is corrected, and a typo is noticed after the fact
+ * or not at all. `PENDING_PAYMENT` is not — handing over a parcel nobody has
+ * paid for is a mistake worth refusing rather than recording.
+ */
+const SHIPPABLE_STATUSES: OrderStatus[] = [
+  OrderStatus.PAID,
+  OrderStatus.IN_ASSEMBLY,
+  OrderStatus.SHIPPED,
+];
+
+/**
+ * Nova Poshta waybill numbers are fourteen digits.
+ *
+ * Checked because the number is typed off a printed sheet and a wrong one is
+ * silent: the customer follows a parcel that is not theirs, or nothing at
+ * all, and we hear about it when it does not arrive. Only Nova Poshta's
+ * format is pinned — Ukrposhta numbers look nothing like this.
+ */
+const NOVA_POSHTA_TTN = /^\d{14}$/;
+
+/** Long enough for any carrier's number, short enough not to be a paragraph. */
+const MAX_TRACKING_NUMBER_LENGTH = 32;
+
 const PAYMENT_STATUS_BY_INVOICE: Record<InvoiceStatus, PaymentStatus> = {
   created: PaymentStatus.CREATED,
   processing: PaymentStatus.PROCESSING,
@@ -547,6 +574,130 @@ export class OrdersService {
     return order ?? this.toGqlOrder(id, data);
   }
 
+  // ─── Dispatch ─────────────────────────────────────────────────────────
+  // The two points where somebody has physically done something to the
+  // parcel. Authorised by the `admin` custom claim rather than by ownership
+  // — these are not the customer's to call — so unlike everything above,
+  // they load the order without an owner check.
+
+  /**
+   * Records the waybill and marks the order shipped.
+   *
+   * The waybill itself is created by hand in Nova Poshta's own cabinet; what
+   * reaches here is its number. That is the whole of the carrier integration
+   * for now, and it is enough for the customer: the storefront already asks
+   * for `trackingNumber` and already watches `orderUpdates`, so writing it
+   * puts the number on a page somebody may be looking at.
+   *
+   * Accepted again on an order that has already shipped, which is how a
+   * mistyped number is corrected — the status does not move a second time,
+   * and the timeline says a correction rather than a dispatch.
+   */
+  async markOrderShipped({
+    orderId,
+    trackingNumber,
+    byUid,
+  }: {
+    orderId: string;
+    trackingNumber: string;
+    byUid: string;
+  }): Promise<GqlOrder> {
+    const { id, data } = await this.load(orderId);
+
+    if (!SHIPPABLE_STATUSES.includes(data.status)) {
+      throw new ConflictException(
+        data.status === OrderStatus.PENDING_PAYMENT
+          ? 'This order has not been paid for'
+          : `An order that is ${data.status} cannot be shipped`,
+      );
+    }
+
+    const tracking = normalizeTrackingNumber(trackingNumber);
+    assertTrackingNumber(tracking, data.delivery?.method);
+
+    const correction = data.status === OrderStatus.SHIPPED;
+    if (correction && data.trackingNumber === tracking) {
+      // Nothing changed. Returning early keeps a double-click out of the
+      // timeline rather than writing the same entry twice.
+      return this.toGqlOrder(id, data);
+    }
+
+    this.logger.log(
+      `${correction ? 'corrected the waybill on' : 'shipped'} order ${id} (by ${byUid})`,
+    );
+
+    await this.firestore.orders.doc(id).set(
+      {
+        trackingNumber: tracking,
+        status: OrderStatus.SHIPPED,
+        updatedAt: Timestamp.now(),
+        events: [
+          ...data.events,
+          event(
+            OrderStatus.SHIPPED,
+            OrderActor.ADMIN,
+            correction
+              ? 'Оновлено номер накладної'
+              : `Відправлено, ЕН ${tracking}`,
+            byUid,
+          ),
+        ],
+      },
+      { merge: true },
+    );
+
+    return this.readAndPublish(id);
+  }
+
+  /**
+   * Closes out an order the customer has collected.
+   *
+   * Only from `SHIPPED`: nothing polls Nova Poshta, so this is somebody
+   * noticing, and an order that never went out cannot have arrived.
+   */
+  async markOrderDelivered({
+    orderId,
+    byUid,
+  }: {
+    orderId: string;
+    byUid: string;
+  }): Promise<GqlOrder> {
+    const { id, data } = await this.load(orderId);
+
+    if (data.status === OrderStatus.DELIVERED) {
+      // Already where it was being asked to go. Idempotent rather than a
+      // conflict, so a retried call is not an error to explain.
+      return this.toGqlOrder(id, data);
+    }
+
+    if (data.status !== OrderStatus.SHIPPED) {
+      throw new ConflictException(
+        'Only a shipped order can be marked delivered',
+      );
+    }
+
+    this.logger.log(`delivered order ${id} (by ${byUid})`);
+
+    await this.firestore.orders.doc(id).set(
+      {
+        status: OrderStatus.DELIVERED,
+        updatedAt: Timestamp.now(),
+        events: [
+          ...data.events,
+          event(
+            OrderStatus.DELIVERED,
+            OrderActor.ADMIN,
+            'Замовлення отримано',
+            byUid,
+          ),
+        ],
+      },
+      { merge: true },
+    );
+
+    return this.readAndPublish(id);
+  }
+
   // ─── Payment callbacks ────────────────────────────────────────────────
 
   /**
@@ -844,6 +995,23 @@ export class OrdersService {
     }
   }
 
+  /**
+   * Any order, by number.
+   *
+   * No owner check, so it is only ever reached from behind `AdminGuard` —
+   * `loadOwned` below is what every customer-facing path uses, and the two
+   * are kept apart so that dropping the uid is a decision rather than an
+   * argument somebody forgot to pass.
+   */
+  private async load(orderId: string): Promise<{ id: string; data: OrderDoc }> {
+    const id = normalizeOrderId(orderId);
+    const doc = await this.firestore.orders.doc(id).get();
+
+    if (!doc.exists) throw new NotFoundException('No such order');
+
+    return { id, data: doc.data() };
+  }
+
   private async loadOwned(
     orderId: string,
     uid: string,
@@ -984,6 +1152,43 @@ export function isEditable(status: OrderStatus): boolean {
   return OPEN_STATUSES.includes(status);
 }
 
+/**
+ * A waybill number as it was read off the printed sheet.
+ *
+ * Nova Poshta prints its numbers in groups — `2045 0912 3456 78` — and the
+ * cabinet copies them with the spaces in. Stripping the separators here means
+ * the customer is shown one consistent number whichever way it was pasted,
+ * and that a re-entered number compares equal to the stored one.
+ */
+export function normalizeTrackingNumber(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/[\s-]/g, '');
+}
+
+/** Enough of a number that a customer following it reaches their parcel. */
+export function assertTrackingNumber(
+  tracking: string,
+  method?: DeliveryMethod | null,
+) {
+  if (!tracking) {
+    throw new BadRequestException('A waybill number is needed');
+  }
+  if (tracking.length > MAX_TRACKING_NUMBER_LENGTH) {
+    throw new BadRequestException('That is not a waybill number');
+  }
+
+  const novaPoshta =
+    method === DeliveryMethod.NOVA_POSHTA_BRANCH ||
+    method === DeliveryMethod.NOVA_POSHTA_COURIER;
+
+  if (novaPoshta && !NOVA_POSHTA_TTN.test(tracking)) {
+    throw new BadRequestException(
+      'A Nova Poshta waybill number is fourteen digits',
+    );
+  }
+}
+
 export function isCancellable(status: OrderStatus): boolean {
   return OPEN_STATUSES.includes(status);
 }
@@ -1036,8 +1241,18 @@ function event(
   status: OrderStatus,
   actor: OrderActor,
   note: string | null,
+  byUid?: string,
 ): OrderEventDoc {
-  return { at: Timestamp.now(), status, actor, note };
+  // `byUid` is left off entirely rather than written as null when there is
+  // none: Firestore stores what it is given, and an absent field reads back
+  // the same as a null one without occupying a byte on every customer event.
+  return {
+    at: Timestamp.now(),
+    status,
+    actor,
+    note,
+    ...(byUid ? { byUid } : {}),
+  };
 }
 
 function noteFor(
