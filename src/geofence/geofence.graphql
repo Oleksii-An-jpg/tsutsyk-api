@@ -1,0 +1,50 @@
+# A point on the map, in degrees.
+type LatLng {
+    lat: Float!
+    lng: Float!
+}
+
+input LatLngInput {
+    lat: Float!
+    lng: Float!
+}
+
+# A polygon a tracker is expected to stay inside. When a tracker that was
+# inside one of its enabled areas reports a fix clearly outside all of them,
+# its owner gets a push naming the area it left — once per exit, not per fix.
+type AlertArea {
+    id: ID!
+    tsutsykId: ID!
+    name: String!
+    # The outline in drawing order; the last point joins back to the first.
+    points: [LatLng!]!
+    # A paused area is kept, but the exit check ignores it.
+    enabled: Boolean!
+}
+
+extend type Query {
+    # The areas drawn for one tracker. Requires auth; caller must own it.
+    getAlertAreas(tsutsykId: ID!): [AlertArea!]!
+}
+
+extend type Mutation {
+    # Requires auth and ownership. 3–100 points, a name of up to 40
+    # characters, and at most 10 areas per tracker.
+    createAlertArea(
+        tsutsykId: ID!,
+        name: String!,
+        points: [LatLngInput!]!
+    ): AlertArea!
+
+    # Omitted fields are left alone. Any change forgets whether the tracker
+    # was inside, so the next fix sets a fresh baseline instead of alerting.
+    updateAlertArea(
+        tsutsykId: ID!,
+        id: ID!,
+        name: String,
+        points: [LatLngInput!],
+        enabled: Boolean
+    ): AlertArea!
+
+    deleteAlertArea(tsutsykId: ID!, id: ID!): Boolean!
+}

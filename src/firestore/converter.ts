@@ -4,6 +4,7 @@ import {
   QueryDocumentSnapshot,
 } from 'firebase-admin/firestore';
 import {
+  AlertAreaDoc,
   LocationDoc,
   OrderDoc,
   PushSubscriptionDoc,
@@ -30,6 +31,7 @@ export const tsutsykConverter: FirestoreDataConverter<TsutsykDoc> = {
       alertRegionUid: data.alertRegionUid,
       claimedAt: data.claimedAt,
       lowBatteryNotified: data.lowBatteryNotified ?? false,
+      geofence: data.geofence ?? null,
     };
   },
 };
@@ -120,3 +122,19 @@ export const pushSubscriptionConverter: FirestoreDataConverter<PushSubscriptionD
       };
     },
   };
+
+export const alertAreaConverter: FirestoreDataConverter<AlertAreaDoc> = {
+  toFirestore(area: AlertAreaDoc): DocumentData {
+    return area;
+  },
+  fromFirestore(snapshot: QueryDocumentSnapshot<AlertAreaDoc>): AlertAreaDoc {
+    const data = snapshot.data();
+    return {
+      name: data.name,
+      points: data.points ?? [],
+      enabled: data.enabled ?? true,
+      createdAt: data.createdAt,
+      updatedAt: data.updatedAt ?? data.createdAt,
+    };
+  },
+};

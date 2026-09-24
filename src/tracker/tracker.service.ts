@@ -31,6 +31,7 @@ import {
   resolveReportingPolicy,
 } from './reporting-policy';
 import { NotificationsService } from '../notifications/notifications.service';
+import { GeofenceService } from '../geofence/geofence.service';
 
 export const DEFAULT_ALERT_DISTANCE_METERS = 100;
 
@@ -59,6 +60,7 @@ export class TrackerService {
     private readonly firestore: FirestoreService,
     private readonly alerts: AlertsService,
     private readonly notifications: NotificationsService,
+    private readonly geofence: GeofenceService,
   ) {}
 
   private toRawLocation(
@@ -155,6 +157,11 @@ export class TrackerService {
 
     // 3. Publish to subscribers
     await this.pubSub.publish('locationUpdates', { locationUpdates: gqlPoint });
+
+    // 4. Has it left its alert areas? Detached for the same reason as the
+    // battery warning: the device is waiting on this request, and must not
+    // wait on a push service. `checkFix` never rejects.
+    void this.geofence.checkFix(tsutsykId, { lat, lng });
 
     return gqlPoint;
   }
