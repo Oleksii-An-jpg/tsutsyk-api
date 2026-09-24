@@ -1,4 +1,5 @@
 import { Timestamp } from 'firebase-admin/firestore';
+import { GeofenceState } from '../geofence/geofence';
 import {
   DeliveryMethod,
   OrderActor,
@@ -29,6 +30,33 @@ export interface TsutsykDoc {
    * have said it, a flat battery would be a notification twelve times an hour.
    */
   lowBatteryNotified?: boolean | null;
+  /**
+   * Where the last fix put the tracker relative to its alert areas.
+   *
+   * Remembered for the same reason as `lowBatteryNotified`: the exit alert is
+   * edge-triggered, and the edge is between this fix and the one before it.
+   * Reset to null whenever the areas change, so a redrawn fence starts from
+   * "we do not know" instead of from a comparison with a shape that is gone.
+   */
+  geofence?: GeofenceState;
+}
+
+/**
+ * A polygon on the map a tracker is expected to stay inside.
+ *
+ * Lives under its tracker (`tsutsyks/{id}/alertAreas`) rather than in a
+ * collection of its own: every question we ask of it starts from a tracker,
+ * and ownership is the tracker's owner, so there is no second field to keep
+ * in step with the first.
+ */
+export interface AlertAreaDoc {
+  name: string;
+  /** The outline, in order. Closed implicitly: the last point joins the first. */
+  points: { lat: number; lng: number }[];
+  /** Paused areas are kept but ignored by the exit check. */
+  enabled: boolean;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
 }
 
 export interface SessionDoc {

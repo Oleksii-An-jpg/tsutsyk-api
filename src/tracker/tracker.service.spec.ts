@@ -5,6 +5,7 @@ import { FirestoreService } from '../firestore/firestore.service';
 import { AlertsService, AlertStatus } from '../alerts/alerts.service';
 import { TsutsykDoc } from '../firestore/firestore.types';
 import { NotificationsService } from '../notifications/notifications.service';
+import { GeofenceService } from '../geofence/geofence.service';
 import { AirRaidStatus } from '../graphql.schema';
 import {
   NORMAL_INTERVAL_SECONDS,
@@ -63,6 +64,9 @@ function fakeNotifications(enabled = true) {
   };
 }
 
+/** None of these fixtures record a fix, so the alert area check never runs. */
+const noGeofence = {} as unknown as GeofenceService;
+
 function fakeAlerts(statuses: Record<number, AlertStatus> = {}) {
   return {
     getStatus: (uid?: number | null) =>
@@ -88,6 +92,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         fakeNotifications().service,
+        noGeofence,
       );
 
       const result = await tracker.updateTsutsyk({
@@ -112,6 +117,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         fakeNotifications().service,
+        noGeofence,
       );
 
       await expect(
@@ -128,6 +134,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         fakeNotifications().service,
+        noGeofence,
       );
 
       const result = await tracker.updateTsutsyk({
@@ -149,6 +156,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         fakeNotifications().service,
+        noGeofence,
       );
 
       await tracker.updateTsutsyk({
@@ -166,6 +174,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         fakeNotifications().service,
+        noGeofence,
       );
 
       await expect(
@@ -192,6 +201,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts({ [KYIV_UID]: status }),
         fakeNotifications().service,
+        noGeofence,
       );
 
       expect((await tracker.getTsutsyk('t1'))?.airRaidStatus).toBe(expected);
@@ -205,6 +215,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         fakeNotifications().service,
+        noGeofence,
       );
 
       const result = await tracker.getTsutsyk('t1');
@@ -222,6 +233,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts({ [KYIV_UID]: 'active' }),
         fakeNotifications().service,
+        noGeofence,
       );
 
       await expect(
@@ -240,6 +252,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts({ [KYIV_UID]: 'active' }),
         fakeNotifications().service,
+        noGeofence,
       );
 
       const { policy } = await tracker.resolveReportingPolicyFor('t1', 80);
@@ -252,6 +265,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         fakeNotifications().service,
+        noGeofence,
       );
 
       await expect(
@@ -270,6 +284,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         fakeNotifications().service,
+        noGeofence,
       );
 
       const { policy } = await tracker.resolveReportingPolicyFor('ghost', null);
@@ -293,6 +308,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         notifications.service,
+        noGeofence,
       );
 
       await tracker.resolveReportingPolicyFor('t1', 9);
@@ -311,6 +327,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         notifications.service,
+        noGeofence,
       );
 
       for (const percent of [9, 8, 7, 9]) {
@@ -328,6 +345,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         notifications.service,
+        noGeofence,
       );
 
       for (const percent of [9, 95, 40, 8]) {
@@ -348,6 +366,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         notifications.service,
+        noGeofence,
       );
 
       await tracker.resolveReportingPolicyFor('t1', 90);
@@ -364,6 +383,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         notifications.service,
+        noGeofence,
       );
 
       await tracker.resolveReportingPolicyFor('t1', 80);
@@ -381,6 +401,7 @@ describe('TrackerService — air raid region', () => {
         service,
         fakeAlerts(),
         notifications.service,
+        noGeofence,
       );
 
       await tracker.resolveReportingPolicyFor('t1', 5);
@@ -397,7 +418,12 @@ describe('TrackerService — air raid region', () => {
         enabled: true,
         sendToUser: () => Promise.reject(new Error('push is down')),
       } as unknown as NotificationsService;
-      const tracker = new TrackerService(service, fakeAlerts(), exploding);
+      const tracker = new TrackerService(
+        service,
+        fakeAlerts(),
+        exploding,
+        noGeofence,
+      );
 
       const { policy } = await tracker.resolveReportingPolicyFor('t1', 5);
       await settle();

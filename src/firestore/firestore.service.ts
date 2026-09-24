@@ -7,6 +7,7 @@ import {
   locationConverter,
   orderConverter,
   pushSubscriptionConverter,
+  alertAreaConverter,
 } from './converter';
 
 const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'tsutsyk-firestore';
@@ -35,6 +36,13 @@ export class FirestoreService {
     return this.db
       .collection('pushSubscriptions')
       .withConverter(pushSubscriptionConverter);
+  }
+
+  alertAreas(tsutsykId: string) {
+    return this.tsutsyks
+      .doc(tsutsykId)
+      .collection('alertAreas')
+      .withConverter(alertAreaConverter);
   }
 
   sessionLocations(sessionId: string) {
