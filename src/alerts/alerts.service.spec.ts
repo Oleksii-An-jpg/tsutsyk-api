@@ -59,16 +59,27 @@ describe('parseOblastStatuses', () => {
   // failure this feature must never have — so it is an error, not a warning.
   it.each([
     ['too short', 'NNN'],
-    ['too long', 'N'.repeat(OBLAST_COUNT + 1)],
     ['empty', ''],
   ])('rejects a %s payload', (_label, body) => {
     expect(() => parseOblastStatuses(body)).toThrow(/expected 27 oblast/);
   });
 
-  it('rejects an unrecognised status character', () => {
+  // The official client reads only the first 27 positions; anything past them
+  // is not ours to judge, and rejecting it left every oblast on "unknown".
+  it('reads the leading oblasts of a longer payload', () => {
+    const body = statusString({ [KYIV]: 'A' }) + 'NNNNA ';
+    const statuses = parseOblastStatuses(body);
+    expect(statuses.size).toBe(OBLAST_COUNT);
+    expect(statuses.get(KYIV)).toBe('active');
+    expect(statuses.get(LVIV)).toBe('no_alert');
+  });
+
+  it('reads an unrecognised status character as unknown for that oblast only', () => {
     const chars = statusString().split('');
     chars[0] = 'X';
-    expect(() => parseOblastStatuses(chars.join(''))).toThrow(/unrecognised/);
+    const statuses = parseOblastStatuses(chars.join(''));
+    expect(statuses.get(OBLASTS[0].uid)).toBe('unknown');
+    expect(statuses.get(LVIV)).toBe('no_alert');
   });
 
   it.each([[null], [42], [{}], [undefined]])(

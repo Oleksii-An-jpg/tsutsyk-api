@@ -75,15 +75,21 @@ interface Snapshot {
 /**
  * Parses the positional IoT status string into a status per oblast uid.
  *
- * Throws on a malformed payload rather than silently mapping the tail to
- * `no_alert`: a short string would quietly mark late-alphabet oblasts as quiet,
- * which is the one failure mode this whole feature must never have.
+ * Only the first `OBLAST_COUNT` characters are ours to read: that is all the
+ * official client reads, and alerts.in.ua is free to pad or extend the string
+ * past them. Refusing a longer payload would throw away every good reading
+ * and leave every oblast stuck on `unknown`.
+ *
+ * A *short* string is still an error rather than silently mapping the tail to
+ * `no_alert`: it would quietly mark late-alphabet oblasts as quiet, which is
+ * the one failure mode this whole feature must never have. An unrecognised
+ * character only blinds its own oblast — it reads as `unknown`, never quiet.
  */
 export function parseOblastStatuses(raw: unknown): Map<number, AlertStatus> {
   if (typeof raw !== 'string') {
     throw new Error(`expected a status string, got ${typeof raw}`);
   }
-  if (raw.length !== OBLAST_COUNT) {
+  if (raw.length < OBLAST_COUNT) {
     throw new Error(
       `expected ${OBLAST_COUNT} oblast statuses, got ${raw.length}`,
     );
@@ -92,13 +98,7 @@ export function parseOblastStatuses(raw: unknown): Map<number, AlertStatus> {
   const statuses = new Map<number, AlertStatus>();
   for (const oblast of OBLASTS) {
     const char = raw[oblast.index];
-    const status = STATUS_BY_CHAR[char];
-    if (status === undefined) {
-      throw new Error(
-        `unrecognised status ${JSON.stringify(char)} at index ${oblast.index}`,
-      );
-    }
-    statuses.set(oblast.uid, status);
+    statuses.set(oblast.uid, STATUS_BY_CHAR[char] ?? 'unknown');
   }
   return statuses;
 }
